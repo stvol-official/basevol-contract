@@ -1,0 +1,52 @@
+{
+  "name": "@volt-finance/basevol",
+  "version": "1.0.0",
+  "description": "volt finance basevol",
+  "main": "index.js",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "compile": "npx hardhat compile",
+    "deploy:clearing-house:testnet": "npx hardhat run --network base_sepolia scripts/deploy-clearing-house.ts",
+    "deploy:vault:testnet": "npx hardhat run --network base_sepolia scripts/deploy-vault.ts",
+    "deploy:basevol-1hour:testnet": "npx hardhat run --network base_sepolia scripts/deploy-basevol-1hour.ts",
+    "deploy:basevol-1min:testnet": "npx hardhat run --network base_sepolia scripts/deploy-basevol-1min.ts",
+    "deploy:clearing-house:mainnet": "npx hardhat run --network base scripts/deploy-clearing-house.ts",
+    "deploy:vault:mainnet": "npx hardhat run --network base scripts/deploy-vault.ts",
+    "deploy:basevol-1hour:mainnet": "npx hardhat run --network base scripts/deploy-basevol-1hour.ts",
+    "deploy:basevol-1min:mainnet": "npx hardhat run --network base scripts/deploy-basevol-1min.ts",
+    "test": "npx hardhat test"
+  },
+  "devDependencies": {
+    "@chainlink/contracts": "^1.0.0",
+    "@nomicfoundation/hardhat-ethers": "^3.0.5",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.5",
+    "@openzeppelin/contracts": "^5.0.2",
+    "@openzeppelin/hardhat-upgrades": "^3.0.5",
+    "@openzeppelin/test-helpers": "^0.5.16",
+    "@typechain/ethers-v6": "^0.5.1",
+    "@typechain/hardhat": "^9.1.0",
+    "@types/mocha": "^10.0.6",
+    "eslint": "^8.57.0",
+    "hardhat": "^2.22.2",
+    "husky": "^9.0.11",
+    "solidity-coverage": "^0.8.11",
+    "ts-node": "^10.9.2",
+    "typechain": "^8.3.2",
+    "typescript": "^5.4.3"
+  },
+  "dependencies": {
+    "@inquirer/input": "^2.1.1",
+    "@inquirer/select": "^2.2.1",
+    "@nomicfoundation/hardhat-chai-matchers": "^2.0.6",
+    "@openzeppelin/contracts-upgradeable": "^5.0.2",
+    "@pythnetwork/pyth-sdk-solidity": "^2.4.1",
+    "@redstone-finance/evm-connector": "^0.3.6",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.4",
+    "prettier-plugin-solidity": "^1.3.1",
+    "ts-generator": "^0.1.1",
+    "web3": "^4.7.0"
+  }
+}
