@@ -22,8 +22,7 @@ const main = async () => {
       config.Address.Oracle[networkName] === ethers.ZeroAddress ||
       config.Address.Admin[networkName] === ethers.ZeroAddress ||
       config.Address.Operator[networkName] === ethers.ZeroAddress ||
-      config.Address.ClearingHouse[networkName] === ethers.ZeroAddress ||
-      config.Address.Vault[networkName] === ethers.ZeroAddress
+      config.Address.ClearingHouse[networkName] === ethers.ZeroAddress
     ) {
       throw new Error("Missing addresses (Pyth Oracle and/or Admin/Operator)");
     }
@@ -41,7 +40,6 @@ const main = async () => {
     console.log("Operator: %s", config.Address.Operator[networkName]);
     console.log("CommissionFee: %s", config.CommissionFee[networkName]);
     console.log("ClearingHouse: %s", config.Address.ClearingHouse[networkName]);
-    console.log("Vault: %s", config.Address.Vault[networkName]);
     console.log("===========================================");
 
     // Deploy contracts.
@@ -55,7 +53,6 @@ const main = async () => {
         config.Address.Operator[networkName],
         config.CommissionFee[networkName],
         config.Address.ClearingHouse[networkName],
-        config.Address.Vault[networkName],
       ],
       { kind: "uups" },
     );

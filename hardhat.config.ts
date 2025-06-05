@@ -46,7 +46,7 @@ export default {
   solidity: {
     compilers: [
       {
-        version: "0.8.20",
+        version: "0.8.22",
         settings: {
           optimizer: {
             enabled: true,
@@ -76,10 +76,7 @@ export default {
   },
   defaultNetwork: "hardhat",
   etherscan: {
-    apiKey: {
-      base: "QVZC44GURRCQ6YQTX79QSBDW6KBGG5C6CJ",
-      baseSepolia: "QVZC44GURRCQ6YQTX79QSBDW6KBGG5C6CJ",
-    },
+    apiKey: "9MR1GBIK4CNKPMK22C1NGCR425H2TPY7YZ",
     customChains: [
       {
         network: "base",

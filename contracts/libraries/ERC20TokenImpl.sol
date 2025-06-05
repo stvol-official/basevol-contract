@@ -6,7 +6,12 @@ contract ERC20TokenImpl is ERC20 {
   uint8 _decimals;
   address _adminAddress;
 
-  constructor(string memory _name, string memory _symbol, uint8 _dec, address _admin) ERC20(_name, _symbol) {
+  constructor(
+    string memory _name,
+    string memory _symbol,
+    uint8 _dec,
+    address _admin
+  ) ERC20(_name, _symbol) {
     _decimals = _dec;
     _adminAddress = _admin;
   }
@@ -25,5 +30,8 @@ contract ERC20TokenImpl is ERC20 {
   }
   function admin() external view returns (address) {
     return _adminAddress;
+  }
+  function setAdmin(address _admin) external onlyAdmin {
+    _adminAddress = _admin;
   }
 }

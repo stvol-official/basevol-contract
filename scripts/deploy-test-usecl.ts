@@ -14,7 +14,7 @@ const main = async () => {
   const decimal = 6;
 
   // Check if the network is supported.
-  if (networkName === "base" || networkName === "base_sepolia") {
+  if (networkName === "base_sepolia") {
     console.log(`Deploying to ${networkName} network...`);
 
     // Compile contracts.
@@ -39,7 +39,7 @@ const main = async () => {
     await run("verify:verify", {
       address: contractAddress,
       network: network,
-      constructorArguments: [name, symbol, decimal],
+      constructorArguments: [name, symbol, decimal, admin],
     });
   } else {
     console.log(`Deploying to ${networkName} network is not supported...`);

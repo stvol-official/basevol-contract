@@ -33,7 +33,7 @@ contract BaseVolOneMin is
   uint256 private constant ROUND_INTERVAL = 60;
   uint256 private constant ROUND_DURATION = ROUND_INTERVAL * 2;
   uint256 private constant BUFFER_SECONDS = 5;
-  uint256 private constant START_TIMESTAMP = 1736294400; // for epoch
+  uint256 private constant START_TIMESTAMP = 1749049200; // for epoch
 
   event StartRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event EndRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
@@ -85,8 +85,7 @@ contract BaseVolOneMin is
     address _oracleAddress,
     address _adminAddress,
     address _operatorAddress,
-    address _clearingHouseAddress,
-    address _vaultAddress
+    address _clearingHouseAddress
   ) public initializer {
     __UUPSUpgradeable_init();
     __Ownable_init(msg.sender);
@@ -97,14 +96,11 @@ contract BaseVolOneMin is
 
     $.token = IERC20(_usdcAddress);
     $.oracle = IPyth(_oracleAddress);
-    $.vault = _vaultAddress;
     $.clearingHouse = IClearingHouse(_clearingHouseAddress);
     $.adminAddress = _adminAddress;
     $.operatorAddresses.push(_operatorAddress);
     $.commissionfees[0] = 1000; // btc
     $.commissionfees[1] = 1000; // eth
-    $.commissionfees[2] = 1000; // astr
-    $.commissionfees[3] = 1000; // sol
 
     _addPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
     _addPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");

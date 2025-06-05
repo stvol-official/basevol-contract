@@ -29,7 +29,7 @@ contract ClearingHouse is
   uint256 private constant WITHDRAWAL_FEE = PRICE_UNIT / 10; // $0.1
   uint256 private constant MAX_WITHDRAWAL_FEE = 10 * PRICE_UNIT; // $10
   uint256 private constant DEFAULT_FORCE_WITHDRAWAL_DELAY = 24 hours;
-  uint256 private constant START_TIMESTAMP = 1736294400; // for epoch
+  uint256 private constant START_TIMESTAMP = 1749049200; // for epoch
 
   event Deposit(address indexed to, address from, uint256 amount, uint256 result);
   event Withdraw(address indexed to, uint256 amount, uint256 result);
@@ -105,7 +105,8 @@ contract ClearingHouse is
   function initialize(
     address _usdcAddress,
     address _adminAddress,
-    address _operatorVaultAddress
+    address _operatorVaultAddress,
+    address _vaultManagerAddress
   ) public initializer {
     __UUPSUpgradeable_init();
     __Ownable_init(msg.sender);
@@ -114,11 +115,13 @@ contract ClearingHouse is
 
     if (_usdcAddress == address(0)) revert InvalidAddress();
     if (_adminAddress == address(0)) revert InvalidAddress();
+    if (_vaultManagerAddress == address(0)) revert InvalidAddress();
 
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     $.token = IERC20(_usdcAddress);
     $.adminAddress = _adminAddress;
     $.operatorVaultAddress = _operatorVaultAddress;
+    $.vaultManager = IVaultManager(_vaultManagerAddress);
     $.forceWithdrawalDelay = DEFAULT_FORCE_WITHDRAWAL_DELAY;
     $.withdrawalFee = WITHDRAWAL_FEE;
   }

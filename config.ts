@@ -1,32 +1,32 @@
 export default {
   Address: {
     Usdc: {
-      base_sepolia: "0x770D5DE8dd09660F1141CF887D6B50976FBb12A0", // basevol USDC
-      base: "0xbA9986D2381edf1DA03B0B9c1f8b00dc4AacC369",
+      base_sepolia: "0x99c8150e4f29c478291c8D582E789E22f7F53471", // basevol USDC
+      base: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     },
     Oracle: {
-      base_sepolia: "0x2880aB155794e7179c9eE2e38200202908C17B43",
-      base: "0x2880aB155794e7179c9eE2e38200202908C17B43",
+      base_sepolia: "0xA2aa501b19aff244D90cc15a4Cf739D2725B5729",
+      base: "0x8250f4aF4B972684F7b336503E2D6dFeDeB1487a",
     },
     Admin: {
       base_sepolia: "0xC61042a7e9a6fe7E738550f24030D37Ecb296DC0",
-      base: "0x5e6c12e083B1Ad5fB7c7bf5582467EB74cD58a66",
+      base: "0x26B85826014fF3483CBC550B3DDAF5954cc15d70",
     },
     Operator: {
       base_sepolia: "0xC61042a7e9a6fe7E738550f24030D37Ecb296DC0",
-      base: "0x5e6c12e083B1Ad5fB7c7bf5582467EB74cD58a66",
+      base: "0x02F5BC2D279D2Ff10CACa13e04D80587824951C8",
     },
     OperatorVault: {
       base_sepolia: "0xC61042a7e9a6fe7E738550f24030D37Ecb296DC0",
-      base: "0x5e6c12e083B1Ad5fB7c7bf5582467EB74cD58a66",
+      base: "0xfc48F475E7296c9e645311B85F8F2bcb64BD8fbd",
     },
     ClearingHouse: {
-      base_sepolia: "0xB48434a7160AAC2C4e5cdB3C3Cc2Ecfd83c6E292", // ClearingHouse Contract
-      base: "0x618148f2Bb58C5c89737BB160070613d4E1b790a",
+      base_sepolia: "0x813fbbBb2BBde225389220A3E4d436EE73F3c172", // ClearingHouse Contract
+      base: "",
     },
-    Vault: {
-      base_sepolia: "0x8066A8293f5d2fdb7448e5f8AdC33F4079132980", // Vault Contract
-      base: "0xF94e7F50120fe8276B85E21f31C6de097eab8813",
+    VaultManager: {
+      base_sepolia: "0x1A8B9822C98dF3F527b3D0a5e71CC45243F2f6F7", // VaultManager Contract
+      base: "",
     },
   },
   CommissionFee: {

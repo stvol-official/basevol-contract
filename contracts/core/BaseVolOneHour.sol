@@ -32,7 +32,7 @@ contract BaseVolOneHour is
   uint256 private constant MAX_COMMISSION_FEE = 500; // 5%
   uint256 private constant INTERVAL_SECONDS = 3600; // 60 * 60 (1 hour)
   uint256 private constant BUFFER_SECONDS = 600; // 10 * 60 (10min)
-  uint256 private constant START_TIMESTAMP = 1736294400; // for epoch
+  uint256 private constant START_TIMESTAMP = 1749049200; // for epoch
 
   event StartRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event EndRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
@@ -45,14 +45,6 @@ contract BaseVolOneHour is
     uint256 usedCouponAmount
   );
   event RoundSettled(uint256 indexed epoch, uint256 orderCount, uint256 collectedFee);
-  event DepositCoupon(
-    address indexed to,
-    address from,
-    uint256 amount,
-    uint256 expirationEpoch,
-    uint256 result
-  );
-  event DebugLog(string message);
   event PriceIdAdded(uint256 indexed productId, bytes32 priceId, string symbol);
 
   modifier onlyAdmin() {
@@ -893,20 +885,6 @@ contract BaseVolOneHour is
       for (uint i = 0; i < manualPrices.length; i++) {
         ManualPriceData calldata priceData = manualPrices[i];
         problemRound.endPrice[priceData.productId] = priceData.price;
-        emit DebugLog(
-          string.concat(
-            "nextRound | ",
-            "Epoch: ",
-            Strings.toString(nextRound.epoch),
-            " | ",
-            "startPrice[",
-            Strings.toString(nextRound.startPrice[priceData.productId]),
-            "]: ",
-            "endPrice[",
-            Strings.toString(nextRound.endPrice[priceData.productId]),
-            "]"
-          )
-        );
         if (
           nextRound.epoch <= currentEpochNumber && nextRound.startPrice[priceData.productId] == 0
         ) {
@@ -914,18 +892,6 @@ contract BaseVolOneHour is
         }
 
         emit EndRound(problemEpoch, priceData.productId, priceData.price, initDate);
-        emit DebugLog(
-          string.concat(
-            "Manual Price Update | ",
-            "Epoch: ",
-            Strings.toString(problemEpoch),
-            " | ",
-            "Product[",
-            Strings.toString(priceData.productId),
-            "]: ",
-            Strings.toString(priceData.price)
-          )
-        );
       }
       problemRound.isSettled = true;
     }
