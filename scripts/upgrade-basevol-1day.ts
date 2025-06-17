@@ -2,13 +2,13 @@ import { ethers, network, run, upgrades } from "hardhat";
 import input from "@inquirer/input";
 
 /*
- npx hardhat run --network base_sepolia scripts/upgrade-basevol-1hour.ts
- npx hardhat run --network base scripts/upgrade-basevol-1hour.ts
+ npx hardhat run --network base_sepolia scripts/upgrade-basevol-1day.ts
+ npx hardhat run --network base scripts/upgrade-basevol-1day.ts
 */
 
 const NETWORK = ["base_sepolia", "base"];
-const DEPLOYED_PROXY = "0xeA013B26B943B2eA7C8F6427C9f9aB4489320603"; // for testnet
-// const DEPLOYED_PROXY = "0x34834F208F149e0269394324c3f19e06dF2ca9cB"; // for mainnet
+const DEPLOYED_PROXY = "0x6A6c14a89215Df0100C220e883278B9dA6286b4a"; // for testnet
+// const DEPLOYED_PROXY = ""; // for mainnet
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
