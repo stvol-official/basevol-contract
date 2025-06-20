@@ -17,7 +17,7 @@ function sleep(ms: number) {
 const upgrade = async () => {
   // Get network data from Hardhat config (see hardhat.config.ts).
   const networkName = network.name;
-  const contractName = "BaseVolOneHour";
+  const contractName = "BaseVolOneDay";
 
   const PROXY = await input({
     message: "Enter the proxy address",
