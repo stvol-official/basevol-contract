@@ -33,7 +33,7 @@ contract BaseVolOneMin is
   uint256 private constant ROUND_INTERVAL = 60;
   uint256 private constant ROUND_DURATION = ROUND_INTERVAL * 2;
   uint256 private constant BUFFER_SECONDS = 5;
-  uint256 private constant START_TIMESTAMP = 1749049200; // for epoch
+  uint256 private constant START_TIMESTAMP = 1750636800; // for epoch
 
   event StartRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event EndRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
