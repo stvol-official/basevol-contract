@@ -29,7 +29,7 @@ contract ClearingHouse is
   uint256 private constant WITHDRAWAL_FEE = PRICE_UNIT / 10; // $0.1
   uint256 private constant MAX_WITHDRAWAL_FEE = 10 * PRICE_UNIT; // $10
   uint256 private constant DEFAULT_FORCE_WITHDRAWAL_DELAY = 24 hours;
-  uint256 private constant START_TIMESTAMP = 1749049200; // for epoch
+  uint256 private constant START_TIMESTAMP = 1750636800; // for epoch
 
   event Deposit(address indexed to, address from, uint256 amount, uint256 result);
   event Withdraw(address indexed to, uint256 amount, uint256 result);

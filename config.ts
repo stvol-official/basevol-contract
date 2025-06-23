@@ -14,7 +14,7 @@ export default {
     },
     Operator: {
       base_sepolia: "0xC61042a7e9a6fe7E738550f24030D37Ecb296DC0",
-      base: "0x02F5BC2D279D2Ff10CACa13e04D80587824951C8",
+      base: "0x5e6c12e083B1Ad5fB7c7bf5582467EB74cD58a66",
     },
     OperatorVault: {
       base_sepolia: "0xC61042a7e9a6fe7E738550f24030D37Ecb296DC0",
