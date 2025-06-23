@@ -10,7 +10,7 @@ export default {
     },
     Admin: {
       base_sepolia: "0xC61042a7e9a6fe7E738550f24030D37Ecb296DC0",
-      base: "0x26B85826014fF3483CBC550B3DDAF5954cc15d70",
+      base: "0x5e6c12e083B1Ad5fB7c7bf5582467EB74cD58a66",
     },
     Operator: {
       base_sepolia: "0xC61042a7e9a6fe7E738550f24030D37Ecb296DC0",
@@ -22,11 +22,11 @@ export default {
     },
     ClearingHouse: {
       base_sepolia: "0x813fbbBb2BBde225389220A3E4d436EE73F3c172", // ClearingHouse Contract
-      base: "",
+      base: "0x24Ea761cc6b9941ADff142ba5C75E025D56E12D2",
     },
     VaultManager: {
       base_sepolia: "0x1A8B9822C98dF3F527b3D0a5e71CC45243F2f6F7", // VaultManager Contract
-      base: "",
+      base: "0x3EECcDA279Ce530E0107004cdE4f018E2513B006",
     },
   },
   CommissionFee: {
