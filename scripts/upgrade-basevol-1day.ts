@@ -8,7 +8,7 @@ import input from "@inquirer/input";
 
 const NETWORK = ["base_sepolia", "base"];
 const DEPLOYED_PROXY = "0x6A6c14a89215Df0100C220e883278B9dA6286b4a"; // for testnet
-// const DEPLOYED_PROXY = ""; // for mainnet
+// const DEPLOYED_PROXY = 0xCf404C5FE83afFF2A038d114796a0b8C9a28BA4E""; // for mainnet
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
