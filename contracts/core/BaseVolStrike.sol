@@ -125,14 +125,15 @@ abstract contract BaseVolStrike is
       round.epoch = startEpoch;
       round.startTimestamp = initDate;
       round.endTimestamp = initDate + _getIntervalSeconds();
-
-      for (uint i = 0; i < feeds.length; i++) {
-        uint256 productId = updateDataWithIds[i].productId;
-        uint64 pythPrice = uint64(feeds[i].price.price);
+      round.isStarted = true;
+    }
+    for (uint i = 0; i < feeds.length; i++) {
+      uint256 productId = updateDataWithIds[i].productId;
+      uint64 pythPrice = uint64(feeds[i].price.price);
+      if (round.startPrice[productId] == 0) {
         round.startPrice[productId] = pythPrice;
         emit StartRound(startEpoch, productId, pythPrice, initDate);
       }
-      round.isStarted = true;
     }
 
     // end prev round (if started)
@@ -145,14 +146,15 @@ abstract contract BaseVolStrike is
       !prevRound.isSettled
     ) {
       prevRound.endTimestamp = initDate;
-
-      for (uint i = 0; i < feeds.length; i++) {
-        uint256 productId = updateDataWithIds[i].productId;
-        uint64 pythPrice = uint64(feeds[i].price.price);
+      prevRound.isSettled = true;
+    }
+    for (uint i = 0; i < feeds.length; i++) {
+      uint256 productId = updateDataWithIds[i].productId;
+      uint64 pythPrice = uint64(feeds[i].price.price);
+      if (prevRound.endPrice[productId] == 0) {
         prevRound.endPrice[productId] = pythPrice;
         emit EndRound(prevEpoch, productId, pythPrice, initDate);
       }
-      prevRound.isSettled = true;
     }
 
     if (!skipSettlement) {
