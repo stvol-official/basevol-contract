@@ -110,7 +110,7 @@ abstract contract BaseVolStrike is
     uint64 initDate,
     bool skipSettlement
   ) external payable whenNotPaused onlyOperator {
-    if (initDate % _getIntervalSeconds() != 0) revert InvalidInitDate(); // Ensure initDate aligns with the interval boundary
+    if ((initDate - _getStartTimestamp()) % _getIntervalSeconds() != 0) revert InvalidInitDate(); // Ensure initDate aligns with the interval boundary
 
     PythStructs.PriceFeed[] memory feeds = _getPythPrices(updateDataWithIds, initDate);
 
@@ -867,7 +867,7 @@ abstract contract BaseVolStrike is
     uint64 initDate,
     bool skipSettlement
   ) external onlyOperator {
-    if (initDate % _getIntervalSeconds() != 0) revert InvalidInitDate();
+    if ((initDate - _getStartTimestamp()) % _getIntervalSeconds() != 0) revert InvalidInitDate();
 
     uint256 problemEpoch = _epochAt(initDate);
     uint256 currentEpochNumber = _epochAt(block.timestamp);
