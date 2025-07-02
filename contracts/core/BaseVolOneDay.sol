@@ -16,4 +16,8 @@ contract BaseVolOneDay is BaseVolStrike {
   function _getIntervalSeconds() internal pure override returns (uint256) {
     return 86400; // 1 day
   }
+
+  function _getStartTimestamp() internal pure override returns (uint256) {
+    return 1751356800; // 2025-07-01 08:00:00
+  }
 }

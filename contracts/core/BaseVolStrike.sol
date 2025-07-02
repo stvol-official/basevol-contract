@@ -31,9 +31,9 @@ abstract contract BaseVolStrike is
   uint256 private constant BASE = 10000; // 100%
   uint256 private constant MAX_COMMISSION_FEE = 500; // 5%
   uint256 private constant BUFFER_SECONDS = 600; // 10 * 60 (10min)
-  uint256 private constant START_TIMESTAMP = 1750636800; // for epoch
 
   // Abstract functions
+  function _getStartTimestamp() internal pure virtual returns (uint256);
   function _getIntervalSeconds() internal pure virtual returns (uint256);
   function _getStorageSlot() internal pure virtual returns (bytes32);
 
@@ -849,15 +849,15 @@ abstract contract BaseVolStrike is
   function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
   function _epochAt(uint256 timestamp) internal pure returns (uint256) {
-    if (timestamp < START_TIMESTAMP) revert EpochHasNotStartedYet();
-    uint256 elapsedSeconds = timestamp - START_TIMESTAMP;
+    if (timestamp < _getStartTimestamp()) revert EpochHasNotStartedYet();
+    uint256 elapsedSeconds = timestamp - _getStartTimestamp();
     uint256 epoch = elapsedSeconds / _getIntervalSeconds();
     return epoch;
   }
 
   function _epochTimes(uint256 epoch) internal pure returns (uint256 startTime, uint256 endTime) {
     if (epoch < 0) revert InvalidEpoch();
-    startTime = START_TIMESTAMP + (epoch * _getIntervalSeconds());
+    startTime = _getStartTimestamp() + (epoch * _getIntervalSeconds());
     endTime = startTime + _getIntervalSeconds();
     return (startTime, endTime);
   }

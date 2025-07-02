@@ -16,4 +16,8 @@ contract BaseVolOneHour is BaseVolStrike {
   function _getIntervalSeconds() internal pure override returns (uint256) {
     return 3600; // 1 hour
   }
+
+  function _getStartTimestamp() internal pure override returns (uint256) {
+    return 1750636800; // 2025-06-23 00:00:00
+  }
 }
