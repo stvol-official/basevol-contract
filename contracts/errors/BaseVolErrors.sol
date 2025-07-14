@@ -19,4 +19,5 @@ interface IBaseVolErrors is ICommonErrors {
   error PriceIdAlreadyExists();
   error InvalidSymbol();
   error ProductIdAlreadyExists();
+  error AlreadySettled();
 }

@@ -26,6 +26,8 @@ library BaseVolStrikeStorage {
     mapping(uint256 => PriceInfo) priceInfos; // productId => PriceInfo
     mapping(bytes32 => uint256) priceIdToProductId; // priceId => productId
     uint256 priceIdCount;
+    uint256 redeemFee; // redeem fee (e.g. 200 = 2%, 150 = 1.50%)
+    address redeemVault; // vault address for redeeming
     /* IMPROTANT: you can add new variables here */
   }
 }

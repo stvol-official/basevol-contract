@@ -40,6 +40,22 @@ struct FilledOrder {
   uint256 underPrice; // over_price + under_price = 100 * decimal
   uint256 unit;
   bool isSettled; // default: false
+  uint256 overRedeemed; // default: 0
+  uint256 underRedeemed; // default: 0
+}
+
+struct TargetRedeemOrder {
+  uint256 idx;
+  uint256 unit;
+}
+
+struct RedeemRequest {
+  uint256 epoch;
+  uint256 idx;
+  Position position;
+  address user;
+  uint256 unit;
+  TargetRedeemOrder[] targetRedeemOrders;
 }
 
 struct SettlementResult {
