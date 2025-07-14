@@ -12,7 +12,7 @@ dotenv.config();
 
 const mnemonic = fs.existsSync(".secret")
   ? fs.readFileSync(".secret").toString().trim()
-  : "test test test test test test test test test test test junk";
+  : "test test test test test test test test test test test test test junk";
 
 // You need to export an object to set up your config
 // Go to https://hardhat.org/config/ to learn more
@@ -50,7 +50,7 @@ export default {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 200,
+            runs: 1,
           },
           viaIR: true,
         },
@@ -60,7 +60,7 @@ export default {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 400,
+            runs: 1,
           },
           viaIR: true,
         },
