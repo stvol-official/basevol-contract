@@ -13,7 +13,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
 import { BaseVolStrikeStorage } from "../storage/BaseVolStrikeStorage.sol";
-import { Round, FilledOrder, Coupon, WithdrawalRequest, ProductRound, SettlementResult, WinPosition, PriceInfo, PriceUpdateData, ManualPriceData, RedeemRequest, TargetRedeemOrder } from "../types/Types.sol";
+import { Round, FilledOrder, Coupon, WithdrawalRequest, Position, ProductRound, SettlementResult, WinPosition, PriceInfo, PriceUpdateData, ManualPriceData, RedeemRequest, TargetRedeemOrder } from "../types/Types.sol";
 import { IBaseVolErrors } from "../errors/BaseVolErrors.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
@@ -313,6 +313,7 @@ abstract contract BaseVolStrike is
   }
 
   function _transferRedeemedAmountsToVault(FilledOrder storage order) internal {
+    BaseVolStrikeStorage.Layout storage $ = _getStorage();
     if (order.underRedeemed > 0) {
       uint256 redeemedAmount = order.underPrice * order.underRedeemed * PRICE_UNIT;
       $.clearingHouse.subtractUserBalance(order.underUser, redeemedAmount);
