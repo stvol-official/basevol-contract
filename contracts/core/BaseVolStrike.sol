@@ -13,7 +13,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
 import { BaseVolStrikeStorage } from "../storage/BaseVolStrikeStorage.sol";
-import { Round, FilledOrder, Coupon, WithdrawalRequest, Position, ProductRound, SettlementResult, WinPosition, PriceInfo, PriceUpdateData, ManualPriceData, RedeemRequest, TargetRedeemOrder } from "../types/Types.sol";
+import { Round, FilledOrder, Coupon, WithdrawalRequest, ProductRound, SettlementResult, WinPosition, PriceInfo, PriceUpdateData, ManualPriceData } from "../types/Types.sol";
 import { IBaseVolErrors } from "../errors/BaseVolErrors.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
@@ -206,69 +206,6 @@ abstract contract BaseVolStrike is
     return unsettledCount;
   }
 
-  function redeemFilledOrder(RedeemRequest calldata request) external onlyOperator {
-    BaseVolStrikeStorage.Layout storage $ = _getStorage();
-    FilledOrder storage order = $.filledOrders[request.epoch][request.idx];
-    if (order.idx != request.idx) revert InvalidId();
-    if (order.isSettled) revert AlreadySettled();
-    if (request.position == Position.Over) {
-      if (order.overUser != request.user) revert InvalidAddress();
-      if (request.unit > order.unit - order.overRedeemed) revert InvalidAmount();
-    } else {
-      if (order.underUser != request.user) revert InvalidAddress();
-      if (request.unit > order.unit - order.underRedeemed) revert InvalidAmount();
-    }
-
-    uint256 totalRedeemed = 0;
-    for (uint i = 0; i < request.targetRedeemOrders.length; i++) {
-      totalRedeemed += request.targetRedeemOrders[i].unit;
-      TargetRedeemOrder calldata targetRedeemOrder = request.targetRedeemOrders[i];
-      FilledOrder storage targetOrder = $.filledOrders[request.epoch][targetRedeemOrder.idx];
-      if (targetOrder.idx != targetRedeemOrder.idx) revert InvalidId();
-      if (targetOrder.isSettled) revert AlreadySettled();
-      if (request.position == Position.Over) {
-        if (targetOrder.underUser != request.user) revert InvalidAddress();
-        if (targetRedeemOrder.unit > targetOrder.unit - targetOrder.underRedeemed)
-          revert InvalidAmount();
-      } else {
-        if (targetOrder.overUser != request.user) revert InvalidAddress();
-        if (targetRedeemOrder.unit > targetOrder.unit - targetOrder.overRedeemed)
-          revert InvalidAmount();
-      }
-    }
-    if (totalRedeemed != request.unit) revert InvalidAmount();
-
-    uint256 orderPrice = request.position == Position.Over ? order.overPrice : order.underPrice;
-    uint256 paidAmount = 0;
-    if (request.position == Position.Over) {
-      order.overRedeemed += request.unit;
-      paidAmount = orderPrice * request.unit * PRICE_UNIT;
-    } else {
-      order.underRedeemed += request.unit;
-      paidAmount = orderPrice * request.unit * PRICE_UNIT;
-    }
-
-    for (uint i = 0; i < request.targetRedeemOrders.length; i++) {
-      TargetRedeemOrder calldata targetRedeemOrder = request.targetRedeemOrders[i];
-      FilledOrder storage targetOrder = $.filledOrders[request.epoch][targetRedeemOrder.idx];
-      if (request.position == Position.Over) {
-        targetOrder.underRedeemed += targetRedeemOrder.unit;
-        paidAmount += targetOrder.underPrice * targetRedeemOrder.unit * PRICE_UNIT;
-      } else {
-        targetOrder.overRedeemed += targetRedeemOrder.unit;
-        paidAmount += targetOrder.overPrice * targetRedeemOrder.unit * PRICE_UNIT;
-      }
-    }
-
-    uint256 totalAmount = 100 * request.unit * PRICE_UNIT;
-    uint256 redeemAmount = totalAmount - paidAmount;
-    uint256 fee = (redeemAmount * $.redeemFee) / BASE;
-    uint256 redeemAmountAfterFee = redeemAmount - fee;
-
-    $.clearingHouse.subtractUserBalance($.redeemVault, redeemAmountAfterFee);
-    $.clearingHouse.addUserBalance(request.user, redeemAmountAfterFee);
-  }
-
   function submitFilledOrders(
     FilledOrder[] calldata transactions
   ) external nonReentrant onlyOperator {
@@ -312,20 +249,6 @@ abstract contract BaseVolStrike is
     $.lastSubmissionTime = block.timestamp;
   }
 
-  function _transferRedeemedAmountsToVault(FilledOrder storage order) internal {
-    BaseVolStrikeStorage.Layout storage $ = _getStorage();
-    if (order.underRedeemed > 0) {
-      uint256 redeemedAmount = order.underPrice * order.underRedeemed * PRICE_UNIT;
-      $.clearingHouse.subtractUserBalance(order.underUser, redeemedAmount);
-      $.clearingHouse.addUserBalance($.redeemVault, redeemedAmount);
-    }
-    if (order.overRedeemed > 0) {
-      uint256 redeemedAmount = order.overPrice * order.overRedeemed * PRICE_UNIT;
-      $.clearingHouse.subtractUserBalance(order.overUser, redeemedAmount);
-      $.clearingHouse.addUserBalance($.redeemVault, redeemedAmount);
-    }
-  }
-
   function _settleFilledOrder(
     Round storage round,
     FilledOrder storage order
@@ -360,7 +283,6 @@ abstract contract BaseVolStrike is
           order.underPrice * order.unit * PRICE_UNIT,
           0
         );
-        _transferRedeemedAmountsToVault(order);
         _emitSettlement(
           order.idx,
           order.epoch,
@@ -386,15 +308,25 @@ abstract contract BaseVolStrike is
           100 * order.unit * PRICE_UNIT,
           0
         );
-        _transferRedeemedAmountsToVault(order);
       }
     } else if (order.overUser == order.underUser) {
+      winAmount =
+        (
+          isOverWin
+            ? order.underPrice
+            : isUnderWin
+              ? order.overPrice
+              : 0
+        ) *
+        order.unit *
+        PRICE_UNIT;
       winPosition = isOverWin
         ? WinPosition.Over
         : isUnderWin
           ? WinPosition.Under
           : WinPosition.Tie;
 
+      uint256 fee = (winAmount * $.commissionfee) / BASE;
       uint256 usedCoupon = $.clearingHouse.escrowCoupons(
         address(this),
         order.epoch,
@@ -402,102 +334,22 @@ abstract contract BaseVolStrike is
         order.idx
       );
 
-      if (winPosition == WinPosition.Tie) {
-        // Tie case: handle redeem for both positions independently
-        uint256 overAmountToUser = (order.unit - order.overRedeemed) * order.overPrice * PRICE_UNIT;
-        uint256 overAmountToVault = order.overRedeemed * order.overPrice * PRICE_UNIT;
-        uint256 underAmountToUser = (order.unit - order.underRedeemed) *
-          order.underPrice *
-          PRICE_UNIT;
-        uint256 underAmountToVault = order.underRedeemed * order.underPrice * PRICE_UNIT;
-
-        // Release entire escrow amount (100 * order.unit * PRICE_UNIT)
-        $.clearingHouse.releaseFromEscrow(
-          address(this),
-          order.overUser,
-          order.epoch,
-          order.idx,
-          100 * order.unit * PRICE_UNIT,
-          0
-        );
-
-        // Transfer redeem amounts to vault
-        if (overAmountToVault > 0) {
-          $.clearingHouse.subtractUserBalance(order.overUser, overAmountToVault);
-          $.clearingHouse.addUserBalance($.redeemVault, overAmountToVault);
-        }
-        if (underAmountToVault > 0) {
-          $.clearingHouse.subtractUserBalance(order.overUser, underAmountToVault);
-          $.clearingHouse.addUserBalance($.redeemVault, underAmountToVault);
-        }
-
-        winAmount = 0;
-        collectedFee = 0;
-      } else {
-        // Winner/Loser case
-        uint256 redeemedUnit = isOverWin ? order.overRedeemed : order.underRedeemed;
-
-        // Calculate loser position amount and fee
-        uint256 loserPositionTotalAmount = (isOverWin ? order.underPrice : order.overPrice) *
-          order.unit *
-          PRICE_UNIT;
-        uint256 totalFee = (loserPositionTotalAmount * $.commissionfee) / BASE;
-
-        // Calculate winner position amount (no fee)
-        uint256 winnerPositionAmount = (isOverWin ? order.overPrice : order.underPrice) *
-          order.unit *
-          PRICE_UNIT;
-
-        // Calculate user and vault portions
-        uint256 userPortionUnit = order.unit - redeemedUnit;
-        uint256 vaultPortionUnit = redeemedUnit;
-
-        // Winner position: return original amount (no fee)
-        uint256 winnerAmountToUser = (userPortionUnit *
-          (isOverWin ? order.overPrice : order.underPrice) *
-          PRICE_UNIT);
-        uint256 winnerAmountToVault = (vaultPortionUnit *
-          (isOverWin ? order.overPrice : order.underPrice) *
-          PRICE_UNIT);
-
-        // Loser position: apply fee proportionally
-        uint256 loserFeeForUser = (totalFee * userPortionUnit) / order.unit;
-        uint256 loserFeeForVault = (totalFee * vaultPortionUnit) / order.unit;
-
-        uint256 loserAmountToUser = (userPortionUnit *
-          (isOverWin ? order.underPrice : order.overPrice) *
-          PRICE_UNIT) - loserFeeForUser;
-        uint256 loserAmountToVault = (vaultPortionUnit *
-          (isOverWin ? order.underPrice : order.overPrice) *
-          PRICE_UNIT) - loserFeeForVault;
-
-        // Release entire escrow amount first
-        $.clearingHouse.releaseFromEscrow(
-          address(this),
-          order.overUser,
-          order.epoch,
-          order.idx,
-          100 * order.unit * PRICE_UNIT,
-          totalFee
-        );
-
-        // Transfer redeem vault amounts
-        uint256 totalVaultAmount = winnerAmountToVault + loserAmountToVault;
-        if (totalVaultAmount > 0) {
-          $.clearingHouse.subtractUserBalance(order.overUser, totalVaultAmount);
-          $.clearingHouse.addUserBalance($.redeemVault, totalVaultAmount);
-        }
-
-        winAmount = loserPositionTotalAmount;
-        collectedFee = totalFee;
-      }
+      // Return winner's original escrow (no fee)
+      $.clearingHouse.releaseFromEscrow(
+        address(this),
+        order.overUser,
+        order.epoch,
+        order.idx,
+        100 * order.unit * PRICE_UNIT,
+        fee
+      );
 
       // Emit settlement event
       _emitSettlement(
         order.idx,
         order.epoch,
         order.overUser,
-        $.clearingHouse.userBalances(order.overUser) + collectedFee,
+        $.clearingHouse.userBalances(order.overUser) + fee,
         $.clearingHouse.userBalances(order.overUser),
         usedCoupon
       );
@@ -506,7 +358,7 @@ abstract contract BaseVolStrike is
         winPosition: winPosition,
         winAmount: winAmount,
         feeRate: $.commissionfee,
-        fee: collectedFee
+        fee: fee
       });
     } else if (isOverWin) {
       winPosition = WinPosition.Over;
@@ -515,61 +367,58 @@ abstract contract BaseVolStrike is
       winPosition = WinPosition.Under;
       collectedFee += _processWin(order.underUser, order.overUser, order, winPosition);
     } else {
-      // Tie case: handle redeem for both positions independently
-      uint256 overAmountToUser = (order.unit - order.overRedeemed) * order.overPrice * PRICE_UNIT;
-      uint256 overAmountToVault = order.overRedeemed * order.overPrice * PRICE_UNIT;
-      uint256 underAmountToUser = (order.unit - order.underRedeemed) *
-        order.underPrice *
-        PRICE_UNIT;
-      uint256 underAmountToVault = order.underRedeemed * order.underPrice * PRICE_UNIT;
-
-      // Release over position escrow
-      $.clearingHouse.releaseFromEscrow(
-        address(this),
-        order.overUser,
-        order.epoch,
-        order.idx,
-        order.overPrice * order.unit * PRICE_UNIT,
-        0
-      );
-
-      // Release under position escrow
-      $.clearingHouse.releaseFromEscrow(
-        address(this),
-        order.underUser,
-        order.epoch,
-        order.idx,
-        order.underPrice * order.unit * PRICE_UNIT,
-        0
-      );
-
-      // Transfer redeem amounts to vault
-      if (overAmountToVault > 0) {
-        $.clearingHouse.subtractUserBalance(order.overUser, overAmountToVault);
-        $.clearingHouse.addUserBalance($.redeemVault, overAmountToVault);
+      if (order.overUser != order.underUser) {
+        // Tie
+        $.clearingHouse.releaseFromEscrow(
+          address(this),
+          order.overUser,
+          order.epoch,
+          order.idx,
+          order.overPrice * order.unit * PRICE_UNIT,
+          0
+        );
+        $.clearingHouse.releaseFromEscrow(
+          address(this),
+          order.underUser,
+          order.epoch,
+          order.idx,
+          order.underPrice * order.unit * PRICE_UNIT,
+          0
+        );
+        _emitSettlement(
+          order.idx,
+          order.epoch,
+          order.overUser,
+          $.clearingHouse.userBalances(order.overUser),
+          $.clearingHouse.userBalances(order.overUser),
+          0
+        );
+        _emitSettlement(
+          order.idx,
+          order.epoch,
+          order.underUser,
+          $.clearingHouse.userBalances(order.underUser),
+          $.clearingHouse.userBalances(order.underUser),
+          0
+        );
+      } else {
+        $.clearingHouse.releaseFromEscrow(
+          address(this),
+          order.overUser,
+          order.epoch,
+          order.idx,
+          100 * order.unit * PRICE_UNIT,
+          0
+        );
+        _emitSettlement(
+          order.idx,
+          order.epoch,
+          order.overUser,
+          $.clearingHouse.userBalances(order.overUser),
+          $.clearingHouse.userBalances(order.overUser),
+          0
+        );
       }
-      if (underAmountToVault > 0) {
-        $.clearingHouse.subtractUserBalance(order.underUser, underAmountToVault);
-        $.clearingHouse.addUserBalance($.redeemVault, underAmountToVault);
-      }
-
-      _emitSettlement(
-        order.idx,
-        order.epoch,
-        order.overUser,
-        $.clearingHouse.userBalances(order.overUser) + overAmountToVault,
-        $.clearingHouse.userBalances(order.overUser),
-        0
-      );
-      _emitSettlement(
-        order.idx,
-        order.epoch,
-        order.underUser,
-        $.clearingHouse.userBalances(order.underUser) + underAmountToVault,
-        $.clearingHouse.userBalances(order.underUser),
-        0
-      );
-
       $.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Tie,
@@ -598,8 +447,7 @@ abstract contract BaseVolStrike is
     uint256 loserAmount = order.overUser == loser
       ? order.overPrice * order.unit * PRICE_UNIT
       : order.underPrice * order.unit * PRICE_UNIT;
-
-    uint256 totalFee = (loserAmount * $.commissionfee) / BASE;
+    uint256 fee = (loserAmount * $.commissionfee) / BASE;
     uint256 usedCoupon = $.clearingHouse.escrowCoupons(
       address(this),
       order.epoch,
@@ -607,31 +455,17 @@ abstract contract BaseVolStrike is
       order.idx
     );
 
-    // Determine redeem amount based on winner position
-    uint256 redeemedUnit = (winPosition == WinPosition.Over)
-      ? order.overRedeemed
-      : order.underRedeemed;
-
-    // Calculate amounts for winner (no fee)
-    uint256 winnerAmountToUser = ((order.unit - redeemedUnit) *
-      (order.overUser == winner ? order.overPrice : order.underPrice) *
-      PRICE_UNIT);
-    uint256 winnerAmountToVault = (redeemedUnit *
-      (order.overUser == winner ? order.overPrice : order.underPrice) *
-      PRICE_UNIT);
-
-    // Calculate amounts for loser (with fee)
-    uint256 loserFeeForWinner = (totalFee * (order.unit - redeemedUnit)) / order.unit;
-    uint256 loserFeeForVault = (totalFee * redeemedUnit) / order.unit;
-
-    uint256 loserAmountToWinner = ((order.unit - redeemedUnit) *
-      (order.overUser == loser ? order.overPrice : order.underPrice) *
-      PRICE_UNIT) - loserFeeForWinner;
-    uint256 loserAmountToVault = (redeemedUnit *
-      (order.overUser == loser ? order.overPrice : order.underPrice) *
-      PRICE_UNIT) - loserFeeForVault;
-
-    // Release winner's escrow (no fee)
+    // Transfer loser's escrow to winner (with fee handling)
+    $.clearingHouse.settleEscrowWithFee(
+      address(this),
+      loser,
+      winner,
+      order.epoch,
+      loserAmount,
+      order.idx,
+      fee
+    );
+    // Return winner's original escrow (no fee)
     $.clearingHouse.releaseFromEscrow(
       address(this),
       winner,
@@ -640,34 +474,6 @@ abstract contract BaseVolStrike is
       winnerAmount,
       0
     );
-
-    // Release loser's escrow (with total fee)
-    $.clearingHouse.releaseFromEscrow(
-      address(this),
-      loser,
-      order.epoch,
-      order.idx,
-      loserAmount,
-      totalFee
-    );
-
-    // Transfer loser's amount to winner (after fee)
-    if (loserAmountToWinner > 0) {
-      $.clearingHouse.subtractUserBalance(loser, loserAmountToWinner);
-      $.clearingHouse.addUserBalance(winner, loserAmountToWinner);
-    }
-
-    // Transfer redeem amounts to vault
-    uint256 totalVaultAmount = winnerAmountToVault + loserAmountToVault;
-    if (totalVaultAmount > 0) {
-      if (winnerAmountToVault > 0) {
-        $.clearingHouse.subtractUserBalance(winner, winnerAmountToVault);
-      }
-      if (loserAmountToVault > 0) {
-        $.clearingHouse.subtractUserBalance(loser, loserAmountToVault);
-      }
-      $.clearingHouse.addUserBalance($.redeemVault, totalVaultAmount);
-    }
 
     _emitSettlement(
       order.idx,
@@ -681,7 +487,7 @@ abstract contract BaseVolStrike is
       order.idx,
       order.epoch,
       winner,
-      $.clearingHouse.userBalances(winner) - loserAmountToWinner,
+      $.clearingHouse.userBalances(winner) - (loserAmount - fee),
       $.clearingHouse.userBalances(winner),
       0
     );
@@ -690,9 +496,9 @@ abstract contract BaseVolStrike is
       winPosition: winPosition,
       winAmount: loserAmount,
       feeRate: $.commissionfee,
-      fee: totalFee
+      fee: fee
     });
-    return totalFee;
+    return fee;
   }
 
   function pause() external whenNotPaused onlyAdmin {
@@ -1179,25 +985,5 @@ abstract contract BaseVolStrike is
     $.priceIdCount++;
 
     emit PriceIdAdded(_productId, _priceId, _symbol);
-  }
-
-  function setRedeemFee(uint256 _redeemFee) external onlyAdmin {
-    BaseVolStrikeStorage.Layout storage $ = _getStorage();
-    $.redeemFee = _redeemFee;
-  }
-
-  function setRedeemVault(address _redeemVault) external onlyAdmin {
-    BaseVolStrikeStorage.Layout storage $ = _getStorage();
-    $.redeemVault = _redeemVault;
-  }
-
-  function redeemVault() external view returns (address) {
-    BaseVolStrikeStorage.Layout storage $ = _getStorage();
-    return $.redeemVault;
-  }
-
-  function redeemFee() external view returns (uint256) {
-    BaseVolStrikeStorage.Layout storage $ = _getStorage();
-    return $.redeemFee;
   }
 }
