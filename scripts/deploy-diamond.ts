@@ -1,5 +1,4 @@
-import { ethers, network, run } from "hardhat";
-import config from "../config";
+import { ethers } from "hardhat";
 
 /*
  npx hardhat run --network base_sepolia scripts/deploy-diamond.ts
@@ -21,13 +20,23 @@ interface FacetCut {
 }
 
 function getSelectors(contract: any): string[] {
-  const signatures = Object.keys(contract.interface.fragments);
-  return signatures.reduce((acc: string[], val: string) => {
-    if (val !== "init(bytes)") {
-      acc.push(contract.interface.getFunction(val).selector);
+  const signatures: string[] = [];
+
+  // Iterate through all functions in the interface
+  contract.interface.forEachFunction((func: any) => {
+    if (func.name !== "init") {
+      signatures.push(func.selector);
     }
-    return acc;
-  }, []);
+  });
+
+  return signatures;
+}
+
+interface DeployedAddresses {
+  diamondAddress: string;
+  diamondCutFacetAddress: string;
+  diamondInitAddress: string;
+  facetAddresses: Record<string, string>;
 }
 
 export async function deployDiamond(
@@ -39,7 +48,7 @@ export async function deployDiamond(
   clearingHouseAddress: string,
   startTimestamp: number,
   intervalSeconds: number,
-): Promise<{ diamondAddress: string; diamondCutFacetAddress: string }> {
+): Promise<DeployedAddresses> {
   const [deployer] = await ethers.getSigners();
 
   console.log("Deploying Diamond with account:", deployer.address);
@@ -62,7 +71,8 @@ export async function deployDiamond(
   const DiamondInit = await ethers.getContractFactory("DiamondInit");
   const diamondInit = await DiamondInit.deploy();
   await diamondInit.waitForDeployment();
-  console.log("DiamondInit deployed to:", await diamondInit.getAddress());
+  const diamondInitAddress = await diamondInit.getAddress();
+  console.log("DiamondInit deployed to:", diamondInitAddress);
 
   // 4. Deploy all facets
   const facetNames = [
@@ -76,16 +86,19 @@ export async function deployDiamond(
   ];
 
   const cut: FacetCut[] = [];
+  const facetAddresses: Record<string, string> = {};
 
   for (const FacetName of facetNames) {
     const Facet = await ethers.getContractFactory(FacetName);
     const facet = await Facet.deploy();
     await facet.waitForDeployment();
 
-    console.log(`${FacetName} deployed to:`, await facet.getAddress());
+    const facetAddress = await facet.getAddress();
+    facetAddresses[FacetName] = facetAddress;
+    console.log(`${FacetName} deployed to:`, facetAddress);
 
     cut.push({
-      facetAddress: await facet.getAddress(),
+      facetAddress: facetAddress,
       action: FacetCutAction.Add,
       functionSelectors: getSelectors(facet),
     });
@@ -105,6 +118,8 @@ export async function deployDiamond(
     intervalSeconds,
   ]);
 
+  console.log("Cut:", cut);
+
   const tx = await diamondCut.diamondCut(cut, await diamondInit.getAddress(), functionCall);
   console.log("Diamond cut tx:", tx.hash);
 
@@ -115,31 +130,8 @@ export async function deployDiamond(
 
   console.log("Diamond cut completed");
 
-  // 6. Initialize the diamond using InitializationFacet
-  const initializationFacet = await ethers.getContractAt(
-    "InitializationFacet",
-    await diamond.getAddress(),
-  );
-
-  const initTx = await initializationFacet.initialize(
-    usdcAddress,
-    oracleAddress,
-    adminAddress,
-    operatorAddress,
-    commissionFee,
-    clearingHouseAddress,
-    startTimestamp,
-    intervalSeconds,
-  );
-
-  console.log("Diamond initialization tx:", initTx.hash);
-
-  const initReceipt = await initTx.wait();
-  if (!initReceipt || initReceipt.status !== 1) {
-    throw Error(`Diamond initialization failed: ${initTx.hash}`);
-  }
-
-  console.log("Diamond initialization completed");
+  // Diamond is already initialized by DiamondInit during the cut process
+  console.log("Diamond initialization completed via DiamondInit");
 
   // 7. Verify the diamond is working
   const viewFacet = await ethers.getContractAt("ViewFacet", await diamond.getAddress());
@@ -154,5 +146,10 @@ export async function deployDiamond(
   console.log("Commission fee:", commissionFeeFromContract.toString());
   console.log("Current epoch:", currentEpoch.toString());
 
-  return { diamondAddress, diamondCutFacetAddress };
+  return {
+    diamondAddress,
+    diamondCutFacetAddress,
+    diamondInitAddress,
+    facetAddresses,
+  };
 }

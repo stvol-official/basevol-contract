@@ -97,7 +97,7 @@ export default {
     ],
   },
   sourcify: {
-    enabled: true,
+    enabled: false,
   },
   abiExporter: {
     path: "./data/abi",
