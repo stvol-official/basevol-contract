@@ -66,30 +66,6 @@ struct SettlementResult {
   uint256 fee;
 }
 
-// Add new structs for settlement calculations
-struct SettlementAmounts {
-  uint256 winnerAmount;
-  uint256 loserAmount;
-  uint256 totalFee;
-  uint256 winAmount;
-  uint256 collectedFee;
-}
-
-struct PositionAmounts {
-  uint256 winnerAmountToUser;
-  uint256 winnerAmountToVault;
-  uint256 loserAmountToWinner;
-  uint256 loserAmountToVault;
-  uint256 totalVaultAmount;
-}
-
-struct TieAmounts {
-  uint256 overAmountToUser;
-  uint256 overAmountToVault;
-  uint256 underAmountToUser;
-  uint256 underAmountToVault;
-}
-
 struct WithdrawalRequest {
   uint256 idx;
   address user;
