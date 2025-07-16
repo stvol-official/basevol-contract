@@ -23,10 +23,25 @@ contract RedemptionFacet {
     _;
   }
 
+  // Helper function to find FilledOrder by idx in a given epoch
+  function _findFilledOrderByIdx(
+    uint256 epoch,
+    uint256 idx
+  ) internal view returns (FilledOrder storage) {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    FilledOrder[] storage epochOrders = bvs.filledOrders[epoch];
+
+    for (uint256 i = 0; i < epochOrders.length; i++) {
+      if (epochOrders[i].idx == idx) {
+        return epochOrders[i];
+      }
+    }
+    revert LibBaseVolStrike.InvalidId();
+  }
+
   function redeemFilledOrder(RedeemRequest calldata request) external onlyOperator {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    FilledOrder storage order = bvs.filledOrders[request.epoch][request.idx];
-    if (order.idx != request.idx) revert LibBaseVolStrike.InvalidId();
+    FilledOrder storage order = _findFilledOrderByIdx(request.epoch, request.idx);
     if (order.isSettled) revert LibBaseVolStrike.AlreadySettled();
 
     if (request.position == Position.Over) {
@@ -41,8 +56,7 @@ contract RedemptionFacet {
     for (uint i = 0; i < request.targetRedeemOrders.length; i++) {
       totalRedeemed += request.targetRedeemOrders[i].unit;
       TargetRedeemOrder calldata targetRedeemOrder = request.targetRedeemOrders[i];
-      FilledOrder storage targetOrder = bvs.filledOrders[request.epoch][targetRedeemOrder.idx];
-      if (targetOrder.idx != targetRedeemOrder.idx) revert LibBaseVolStrike.InvalidId();
+      FilledOrder storage targetOrder = _findFilledOrderByIdx(request.epoch, targetRedeemOrder.idx);
       if (targetOrder.isSettled) revert LibBaseVolStrike.AlreadySettled();
 
       if (request.position == Position.Over) {
@@ -69,7 +83,7 @@ contract RedemptionFacet {
 
     for (uint i = 0; i < request.targetRedeemOrders.length; i++) {
       TargetRedeemOrder calldata targetRedeemOrder = request.targetRedeemOrders[i];
-      FilledOrder storage targetOrder = bvs.filledOrders[request.epoch][targetRedeemOrder.idx];
+      FilledOrder storage targetOrder = _findFilledOrderByIdx(request.epoch, targetRedeemOrder.idx);
       if (request.position == Position.Over) {
         targetOrder.underRedeemed += targetRedeemOrder.unit;
         paidAmount += targetOrder.underPrice * targetRedeemOrder.unit * PRICE_UNIT;
