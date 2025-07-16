@@ -51,6 +51,7 @@ library LibBaseVolStrike {
   error InvalidId();
   error AlreadySettled();
   error InvalidAmount();
+  error InvalidStrike();
   error InvalidPriceId();
   error InvalidSymbol();
   error PriceIdAlreadyExists();

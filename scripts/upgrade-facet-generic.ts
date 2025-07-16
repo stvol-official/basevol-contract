@@ -1,6 +1,7 @@
 import { ethers, network, run } from "hardhat";
 import input from "@inquirer/input";
 import select from "@inquirer/select";
+import checkbox from "@inquirer/checkbox";
 
 /*
  npx hardhat run --network base_sepolia scripts/upgrade-facet-generic.ts
@@ -47,6 +48,13 @@ interface FacetCut {
   functionSelectors: string[];
 }
 
+interface FacetInfo {
+  name: string;
+  path: string;
+  address?: string;
+  functionSelectors?: string[];
+}
+
 function getSelectors(contract: any): string[] {
   const signatures: string[] = [];
 
@@ -74,7 +82,7 @@ const main = async () => {
     return;
   }
 
-  console.log(`🔄 Diamond Facet Upgrade Tool for ${networkName} network`);
+  console.log(`🔄 Diamond Multi-Facet Upgrade Tool for ${networkName} network`);
 
   // 1. Diamond 주소 입력
   const DIAMOND_ADDRESS = await input({
@@ -85,18 +93,24 @@ const main = async () => {
     },
   });
 
-  // 2. Select facet to upgrade
-  const selectedFacet = await select({
-    message: "Select the facet to upgrade",
+  // 2. Select facets to upgrade (multiple selection)
+  const selectedFacets = await checkbox({
+    message: "Select the facets to upgrade (use Space to select, Enter to confirm)",
     choices: AVAILABLE_FACETS.map((facet) => ({
       name: facet.name,
       value: facet,
     })),
+    validate: (choices: readonly any[]) => {
+      if (choices.length === 0) {
+        return "You must choose at least one facet.";
+      }
+      return true;
+    },
   });
 
-  // 3. Select action type
+  // 3. Select action type (applied to all selected facets)
   const actionType = await select({
-    message: "Select the upgrade action",
+    message: "Select the upgrade action (will be applied to all selected facets)",
     choices: [
       { name: "Replace (Upgrade)", value: FacetCutAction.Replace },
       { name: "Add (New)", value: FacetCutAction.Add },
@@ -107,7 +121,7 @@ const main = async () => {
   console.log("===========================================");
   console.log("Network:", networkName);
   console.log("Diamond Address:", DIAMOND_ADDRESS);
-  console.log("Target Facet:", selectedFacet.name);
+  console.log("Selected Facets:", selectedFacets.map((f: any) => f.name).join(", "));
   console.log(
     "Action:",
     actionType === FacetCutAction.Replace
@@ -120,7 +134,7 @@ const main = async () => {
 
   // Confirmation request
   const confirmation = await input({
-    message: "Do you want to proceed? (yes/no)",
+    message: `Do you want to proceed with ${actionType === FacetCutAction.Replace ? "upgrading" : actionType === FacetCutAction.Add ? "adding" : "removing"} ${selectedFacets.length} facet(s)? (yes/no)`,
     validate: (val) => {
       return ["yes", "no", "y", "n"].includes(val.toLowerCase()) || "Please enter yes or no";
     },
@@ -138,45 +152,68 @@ const main = async () => {
   const [deployer] = await ethers.getSigners();
   console.log("Deployer:", deployer.address);
 
-  let newFacetAddress = "";
-  let functionSelectors: string[] = [];
+  const deployedFacets: FacetInfo[] = [];
+  const cuts: FacetCut[] = [];
 
-  // 4. Deploy new facet unless removing
-  if (actionType !== FacetCutAction.Remove) {
-    console.log(`📦 Deploying new ${selectedFacet.name}...`);
-    const FacetFactory = await ethers.getContractFactory(selectedFacet.name);
-    const newFacet = await FacetFactory.deploy();
-    await newFacet.waitForDeployment();
-    newFacetAddress = await newFacet.getAddress();
-    console.log(`✅ New ${selectedFacet.name} deployed to:`, newFacetAddress);
+  console.log(`\n📦 Processing ${selectedFacets.length} facet(s)...\n`);
 
-    // Get function selectors
-    console.log("🔍 Getting function selectors...");
-    functionSelectors = getSelectors(newFacet);
-    console.log("Function selectors:", functionSelectors);
-  } else {
-    // For removal, get selectors from existing facet
-    console.log("🔍 Getting existing function selectors for removal...");
-    const diamondLoupe = await ethers.getContractAt("IDiamondLoupe", DIAMOND_ADDRESS);
-    const existingFacet = await ethers.getContractFactory(selectedFacet.name);
-    functionSelectors = getSelectors(existingFacet);
-    newFacetAddress = ethers.ZeroAddress; // Use ZeroAddress for removal
-  }
+  // 4. Deploy new facets or get selectors for removal
+  for (let i = 0; i < selectedFacets.length; i++) {
+    const facet = selectedFacets[i];
+    console.log(`[${i + 1}/${selectedFacets.length}] Processing ${facet.name}...`);
 
-  // 5. Prepare Diamond Cut
-  const cut: FacetCut[] = [
-    {
-      facetAddress: newFacetAddress,
+    let facetAddress = "";
+    let functionSelectors: string[] = [];
+
+    if (actionType !== FacetCutAction.Remove) {
+      console.log(`📦 Deploying new ${facet.name}...`);
+      const FacetFactory = await ethers.getContractFactory(facet.name);
+      const newFacet = await FacetFactory.deploy();
+      await newFacet.waitForDeployment();
+      facetAddress = await newFacet.getAddress();
+      console.log(`✅ ${facet.name} deployed to: ${facetAddress}`);
+
+      // Get function selectors
+      functionSelectors = getSelectors(newFacet);
+      console.log(`🔍 Function selectors count: ${functionSelectors.length}`);
+    } else {
+      // For removal, get selectors from existing facet
+      console.log(`🔍 Getting existing function selectors for ${facet.name}...`);
+      const existingFacet = await ethers.getContractFactory(facet.name);
+      functionSelectors = getSelectors(existingFacet);
+      facetAddress = ethers.ZeroAddress; // Use ZeroAddress for removal
+      console.log(`🔍 Function selectors count for removal: ${functionSelectors.length}`);
+    }
+
+    // Store deployed facet info
+    deployedFacets.push({
+      ...facet,
+      address: facetAddress,
+      functionSelectors: functionSelectors,
+    });
+
+    // Prepare cut for this facet
+    cuts.push({
+      facetAddress: facetAddress,
       action: actionType,
       functionSelectors: functionSelectors,
-    },
-  ];
+    });
 
-  // 6. Execute Diamond Cut
-  console.log(`🔄 Executing diamond cut for ${selectedFacet.name}...`);
+    console.log(`✅ ${facet.name} processed successfully\n`);
+  }
+
+  // 5. Execute Diamond Cut for all facets in one transaction
+  console.log(`🔄 Executing diamond cut for ${selectedFacets.length} facet(s)...`);
+  console.log("Cuts to be executed:");
+  cuts.forEach((cut, index) => {
+    console.log(
+      `  ${index + 1}. ${selectedFacets[index].name}: ${cut.functionSelectors.length} selectors`,
+    );
+  });
+
   const diamondCut = await ethers.getContractAt("IDiamondCut", DIAMOND_ADDRESS);
 
-  const tx = await diamondCut.diamondCut(cut, ethers.ZeroAddress, "0x");
+  const tx = await diamondCut.diamondCut(cuts, ethers.ZeroAddress, "0x");
   console.log("Diamond cut tx:", tx.hash);
 
   const receipt = await tx.wait();
@@ -184,79 +221,111 @@ const main = async () => {
     throw Error(`Diamond upgrade failed: ${tx.hash}`);
   }
 
-  console.log("✅ Diamond cut completed successfully!");
+  console.log("✅ Diamond cut completed successfully for all facets!");
 
-  // 7. Verify upgrade
-  if (actionType !== FacetCutAction.Remove && functionSelectors.length > 0) {
-    console.log("🔍 Verifying upgrade...");
-    try {
-      const diamondLoupe = await ethers.getContractAt("IDiamondLoupe", DIAMOND_ADDRESS);
-      const facetAddress = await diamondLoupe.facetAddress(functionSelectors[0]);
-
-      if (facetAddress === newFacetAddress) {
-        console.log("✅ Upgrade verification successful!");
-        console.log(
-          `${selectedFacet.name} has been successfully ${actionType === FacetCutAction.Add ? "added" : "upgraded"} to:`,
-          newFacetAddress,
-        );
-      } else {
-        console.log("❌ Upgrade verification failed!");
-        console.log("Expected:", newFacetAddress);
-        console.log("Actual:", facetAddress);
-      }
-    } catch (error) {
-      console.log("⚠️  Could not verify upgrade:", error);
-    }
-
-    // 8. Function testing (if possible)
-    console.log(`🧪 Testing upgraded ${selectedFacet.name}...`);
-    try {
-      const facetContract = await ethers.getContractAt(selectedFacet.name, DIAMOND_ADDRESS);
-      console.log(`✅ ${selectedFacet.name} functions are accessible`);
-    } catch (error) {
-      console.log(`⚠️  Could not test ${selectedFacet.name} functions:`, error);
-    }
-
-    // 9. Contract verification
-    await sleep(6000);
-    console.log(`🔍 Verifying new ${selectedFacet.name} contract...`);
-
-    try {
-      const apiKey = process.env.ALCHEMY_API_KEY;
-      const networkInfo = await ethers
-        .getDefaultProvider(
-          `https://base-${networkName === "base_sepolia" ? "sepolia" : "mainnet"}.g.alchemy.com/v2/${apiKey}`,
-        )
-        .getNetwork();
-
-      await run("verify:verify", {
-        address: newFacetAddress,
-        network: networkInfo,
-        contract: selectedFacet.path,
-        constructorArguments: [],
-      });
-      console.log(`✅ ${selectedFacet.name} verification done`);
-    } catch (error) {
-      console.log(`❌ ${selectedFacet.name} verification failed:`, error);
-    }
-  }
-
-  console.log(
-    `\n🎉 ${selectedFacet.name} ${actionType === FacetCutAction.Replace ? "upgrade" : actionType === FacetCutAction.Add ? "addition" : "removal"} completed!`,
-  );
-  console.log("===========================================");
-  console.log("Diamond Address:", DIAMOND_ADDRESS);
+  // 6. Verify upgrades
   if (actionType !== FacetCutAction.Remove) {
-    console.log(`New ${selectedFacet.name} Address:`, newFacetAddress);
+    console.log("\n🔍 Verifying upgrades...");
+    const diamondLoupe = await ethers.getContractAt("IDiamondLoupe", DIAMOND_ADDRESS);
+
+    for (let i = 0; i < deployedFacets.length; i++) {
+      const facet = deployedFacets[i];
+      console.log(`\n[${i + 1}/${deployedFacets.length}] Verifying ${facet.name}...`);
+
+      try {
+        if (facet.functionSelectors && facet.functionSelectors.length > 0) {
+          const facetAddress = await diamondLoupe.facetAddress(facet.functionSelectors[0]);
+
+          if (facetAddress === facet.address) {
+            console.log(`✅ ${facet.name} verification successful!`);
+            console.log(`   Address: ${facet.address}`);
+          } else {
+            console.log(`❌ ${facet.name} verification failed!`);
+            console.log(`   Expected: ${facet.address}`);
+            console.log(`   Actual: ${facetAddress}`);
+          }
+        }
+      } catch (error) {
+        console.log(`⚠️  Could not verify ${facet.name}:`, error);
+      }
+    }
+
+    // 7. Function testing
+    console.log("\n🧪 Testing upgraded facets...");
+    for (let i = 0; i < deployedFacets.length; i++) {
+      const facet = deployedFacets[i];
+      console.log(`[${i + 1}/${deployedFacets.length}] Testing ${facet.name}...`);
+
+      try {
+        const facetContract = await ethers.getContractAt(facet.name, DIAMOND_ADDRESS);
+        console.log(`✅ ${facet.name} functions are accessible`);
+      } catch (error) {
+        console.log(`⚠️  Could not test ${facet.name} functions:`, error);
+      }
+    }
+
+    // 8. Contract verification (if API key available)
+    console.log("\n🔍 Verifying contracts on block explorer...");
+    const apiKey = process.env.ALCHEMY_API_KEY;
+
+    if (apiKey) {
+      await sleep(6000); // Wait for block explorer indexing
+
+      for (let i = 0; i < deployedFacets.length; i++) {
+        const facet = deployedFacets[i];
+        console.log(`[${i + 1}/${deployedFacets.length}] Verifying ${facet.name} contract...`);
+
+        try {
+          const networkInfo = await ethers
+            .getDefaultProvider(
+              `https://base-${networkName === "base_sepolia" ? "sepolia" : "mainnet"}.g.alchemy.com/v2/${apiKey}`,
+            )
+            .getNetwork();
+
+          await run("verify:verify", {
+            address: facet.address,
+            network: networkInfo,
+            contract: facet.path,
+            constructorArguments: [],
+          });
+          console.log(`✅ ${facet.name} verification done`);
+        } catch (error) {
+          console.log(`❌ ${facet.name} verification failed:`, error);
+        }
+      }
+    } else {
+      console.log("⚠️  No ALCHEMY_API_KEY found, skipping block explorer verification");
+    }
   }
+
+  // 9. Summary
+  console.log("\n" + "=".repeat(60));
+  console.log("🎉 MULTI-FACET UPGRADE COMPLETED!");
+  console.log("=".repeat(60));
   console.log("Network:", networkName);
-  console.log("===========================================");
+  console.log("Diamond Address:", DIAMOND_ADDRESS);
+  console.log(
+    `Action: ${actionType === FacetCutAction.Replace ? "Replace" : actionType === FacetCutAction.Add ? "Add" : "Remove"}`,
+  );
+  console.log(`Processed Facets: ${selectedFacets.length}`);
+  console.log("\nFacet Details:");
+
+  deployedFacets.forEach((facet, index) => {
+    console.log(`  ${index + 1}. ${facet.name}`);
+    if (actionType !== FacetCutAction.Remove) {
+      console.log(`     Address: ${facet.address}`);
+      console.log(`     Functions: ${facet.functionSelectors?.length || 0}`);
+    }
+  });
+
+  console.log("=".repeat(60));
 
   if (actionType !== FacetCutAction.Remove) {
     console.log("\n📝 Next steps:");
-    console.log("1. Update your frontend to use the new Diamond ABI if needed");
-    console.log(`2. Test all ${selectedFacet.name} functions thoroughly`);
-    console.log("3. Update documentation with the new facet address");
+    console.log("1. Update your frontend if any function signatures changed");
+    console.log("2. Test all upgraded facet functions thoroughly");
+    console.log("3. Update documentation with new facet addresses");
+    console.log("4. Monitor the system for any issues");
   }
 };
 

@@ -59,6 +59,8 @@ contract RedemptionFacet {
       FilledOrder storage targetOrder = _findFilledOrderByIdx(request.epoch, targetRedeemOrder.idx);
       if (targetOrder.isSettled) revert LibBaseVolStrike.AlreadySettled();
 
+      if (order.strike != targetOrder.strike) revert LibBaseVolStrike.InvalidStrike();
+
       if (request.position == Position.Over) {
         if (targetOrder.underUser != request.user) revert LibBaseVolStrike.InvalidAddress();
         if (targetRedeemOrder.unit > targetOrder.unit - targetOrder.underRedeemed)
@@ -71,14 +73,62 @@ contract RedemptionFacet {
     }
     if (totalRedeemed != request.unit) revert LibBaseVolStrike.InvalidAmount();
 
-    uint256 orderPrice = request.position == Position.Over ? order.overPrice : order.underPrice;
-    uint256 paidAmount = 0;
+    // Total units being redeemed (each unit is a hedge pair: over + under)
+    uint256 totalUnits = request.unit;
+
+    // Calculate base redemption amount (100 USDC per unit)
+    uint256 baseRedemptionAmount = totalUnits * 100 * PRICE_UNIT;
+    require(
+      totalUnits == 0 || baseRedemptionAmount / PRICE_UNIT / totalUnits == 100,
+      "Multiplication overflow"
+    );
+
+    // Calculate total paid price by user for the hedge positions
+    // Each unit consists of 1 over position + 1 under position from different orders
+    uint256 totalPaidPrice = 0;
+
+    // For each unit being redeemed, add the price from main order and corresponding target order
+    for (uint i = 0; i < request.targetRedeemOrders.length; i++) {
+      TargetRedeemOrder calldata targetRedeemOrder = request.targetRedeemOrders[i];
+      FilledOrder storage targetOrder = _findFilledOrderByIdx(request.epoch, targetRedeemOrder.idx);
+
+      // Each target order unit pairs with main order units
+      uint256 pairUnits = targetRedeemOrder.unit; // Should match part of request.unit
+
+      if (request.position == Position.Over) {
+        // User has Over position in main order, Under position in target order
+        uint256 mainPrice = order.overPrice * pairUnits;
+        uint256 targetPrice = targetOrder.underPrice * pairUnits;
+        totalPaidPrice += mainPrice + targetPrice;
+      } else {
+        // User has Under position in main order, Over position in target order
+        uint256 mainPrice = order.underPrice * pairUnits;
+        uint256 targetPrice = targetOrder.overPrice * pairUnits;
+        totalPaidPrice += mainPrice + targetPrice;
+      }
+    }
+
+    // Calculate profit commission
+    uint256 profitCommission = 0;
+    if (totalPaidPrice < 100 * totalUnits) {
+      uint256 profitAmount = (100 * totalUnits - totalPaidPrice);
+      profitCommission = (profitAmount * bvs.commissionfee * PRICE_UNIT) / BASE;
+    }
+
+    // Calculate redeem commission (fixed amount)
+    uint256 redeemCommission = bvs.redeemFee * totalUnits;
+
+    // Calculate final redemption amount
+    uint256 totalCommission = profitCommission + redeemCommission;
+    if (totalCommission > baseRedemptionAmount) revert LibBaseVolStrike.InvalidAmount();
+
+    uint256 finalRedemptionAmount = baseRedemptionAmount - totalCommission;
+
+    // Update redeemed amounts
     if (request.position == Position.Over) {
       order.overRedeemed += request.unit;
-      paidAmount = orderPrice * request.unit * PRICE_UNIT;
     } else {
       order.underRedeemed += request.unit;
-      paidAmount = orderPrice * request.unit * PRICE_UNIT;
     }
 
     for (uint i = 0; i < request.targetRedeemOrders.length; i++) {
@@ -86,20 +136,14 @@ contract RedemptionFacet {
       FilledOrder storage targetOrder = _findFilledOrderByIdx(request.epoch, targetRedeemOrder.idx);
       if (request.position == Position.Over) {
         targetOrder.underRedeemed += targetRedeemOrder.unit;
-        paidAmount += targetOrder.underPrice * targetRedeemOrder.unit * PRICE_UNIT;
       } else {
         targetOrder.overRedeemed += targetRedeemOrder.unit;
-        paidAmount += targetOrder.overPrice * targetRedeemOrder.unit * PRICE_UNIT;
       }
     }
 
-    uint256 totalAmount = 100 * request.unit * PRICE_UNIT;
-    uint256 redeemAmount = totalAmount - paidAmount;
-    uint256 fee = (redeemAmount * bvs.redeemFee) / BASE;
-    uint256 redeemAmountAfterFee = redeemAmount - fee;
-
-    bvs.clearingHouse.subtractUserBalance(bvs.redeemVault, redeemAmountAfterFee);
-    bvs.clearingHouse.addUserBalance(request.user, redeemAmountAfterFee);
+    // Transfer final redemption amount from redeem vault to user
+    bvs.clearingHouse.subtractUserBalance(bvs.redeemVault, finalRedemptionAmount);
+    bvs.clearingHouse.addUserBalance(request.user, finalRedemptionAmount);
   }
 
   function setRedeemFee(uint256 _redeemFee) external onlyAdmin {
