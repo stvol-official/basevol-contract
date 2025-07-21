@@ -58,6 +58,16 @@ struct RedeemRequest {
   TargetRedeemOrder[] targetRedeemOrders;
 }
 
+struct RedeemPairs {
+  uint256 epoch;
+  uint256 productId;
+  uint256 strike;
+  uint256 unit;
+  address user;
+  TargetRedeemOrder[] overOrders;
+  TargetRedeemOrder[] underOrders;
+}
+
 struct SettlementResult {
   uint256 idx; // filled order idx
   WinPosition winPosition;

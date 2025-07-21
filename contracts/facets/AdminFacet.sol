@@ -7,9 +7,8 @@ import { PriceInfo } from "../types/Types.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IPyth } from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
-import { Pausable } from "@openzeppelin/contracts/utils/Pausable.sol";
 
-contract AdminFacet is Pausable {
+contract AdminFacet {
   using LibBaseVolStrike for LibBaseVolStrike.DiamondStorage;
   using SafeERC20 for IERC20;
 
@@ -27,14 +26,6 @@ contract AdminFacet is Pausable {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     require(msg.sender == bvs.operatorAddress, "Only operator");
     _;
-  }
-
-  function pause() external whenNotPaused onlyAdmin {
-    _pause();
-  }
-
-  function unpause() external whenPaused onlyAdmin {
-    _unpause();
   }
 
   function retrieveMisplacedETH() external onlyAdmin {
@@ -55,13 +46,13 @@ contract AdminFacet is Pausable {
     bvs.operatorAddress = _operatorAddress;
   }
 
-  function setOracle(address _oracle) external whenPaused onlyAdmin {
+  function setOracle(address _oracle) external onlyAdmin {
     if (_oracle == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     bvs.oracle = IPyth(_oracle);
   }
 
-  function setCommissionfee(uint256 _commissionfee) external whenPaused onlyAdmin {
+  function setCommissionfee(uint256 _commissionfee) external onlyAdmin {
     if (_commissionfee > MAX_COMMISSION_FEE) revert LibBaseVolStrike.InvalidCommissionFee();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     bvs.commissionfee = _commissionfee;

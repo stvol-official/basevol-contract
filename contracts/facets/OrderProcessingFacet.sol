@@ -12,15 +12,6 @@ contract OrderProcessingFacet is ReentrancyGuard {
   uint256 private constant PRICE_UNIT = 1e6;
   uint256 private constant BASE = 10000; // 100%
 
-  event OrderSettled(
-    address indexed user,
-    uint256 indexed idx,
-    uint256 epoch,
-    uint256 prevBalance,
-    uint256 newBalance,
-    uint256 usedCouponAmount
-  );
-
   modifier onlyOperator() {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     require(msg.sender == bvs.operatorAddress, "Only operator");
@@ -132,173 +123,7 @@ contract OrderProcessingFacet is ReentrancyGuard {
     Round storage round,
     FilledOrder storage order
   ) internal returns (uint256) {
-    if (order.isSettled) return 0;
-
-    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    uint256 strikePrice = (round.startPrice[order.productId] * order.strike) / 10000;
-    bool isOverWin = strikePrice < round.endPrice[order.productId];
-    bool isUnderWin = strikePrice > round.endPrice[order.productId];
-
-    uint256 collectedFee = 0;
-    WinPosition winPosition;
-    uint256 winAmount = 0;
-
-    if (order.overPrice + order.underPrice != 100) {
-      winPosition = WinPosition.Invalid;
-      if (order.overUser != order.underUser) {
-        bvs.clearingHouse.releaseFromEscrow(
-          address(this),
-          order.overUser,
-          order.epoch,
-          order.idx,
-          order.overPrice * order.unit * PRICE_UNIT,
-          0
-        );
-        bvs.clearingHouse.releaseFromEscrow(
-          address(this),
-          order.underUser,
-          order.epoch,
-          order.idx,
-          order.underPrice * order.unit * PRICE_UNIT,
-          0
-        );
-        _transferRedeemedAmountsToVault(order);
-        _emitSettlement(
-          order.idx,
-          order.epoch,
-          order.underUser,
-          bvs.clearingHouse.userBalances(order.underUser),
-          bvs.clearingHouse.userBalances(order.underUser),
-          0
-        );
-        _emitSettlement(
-          order.idx,
-          order.epoch,
-          order.overUser,
-          bvs.clearingHouse.userBalances(order.overUser),
-          bvs.clearingHouse.userBalances(order.overUser),
-          0
-        );
-      } else {
-        bvs.clearingHouse.releaseFromEscrow(
-          address(this),
-          order.overUser,
-          order.epoch,
-          order.idx,
-          100 * order.unit * PRICE_UNIT,
-          0
-        );
-        _transferRedeemedAmountsToVault(order);
-      }
-    } else if (order.overUser == order.underUser) {
-      // Same user logic - implement the tie/win logic
-      winPosition = isOverWin
-        ? WinPosition.Over
-        : isUnderWin
-          ? WinPosition.Under
-          : WinPosition.Tie;
-      // TODO: Implement same user settlement logic
-    } else if (isOverWin) {
-      winPosition = WinPosition.Over;
-      collectedFee += _processWin(order.overUser, order.underUser, order, winPosition);
-    } else if (isUnderWin) {
-      winPosition = WinPosition.Under;
-      collectedFee += _processWin(order.underUser, order.overUser, order, winPosition);
-    } else {
-      // Tie case
-      winPosition = WinPosition.Tie;
-      // TODO: Implement tie settlement logic
-    }
-
-    order.isSettled = true;
-    return collectedFee;
-  }
-
-  function _processWin(
-    address winner,
-    address loser,
-    FilledOrder storage order,
-    WinPosition winPosition
-  ) internal returns (uint256) {
-    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-
-    uint256 winnerAmount = order.overUser == winner
-      ? order.overPrice * order.unit * PRICE_UNIT
-      : order.underPrice * order.unit * PRICE_UNIT;
-
-    uint256 loserAmount = order.overUser == loser
-      ? order.overPrice * order.unit * PRICE_UNIT
-      : order.underPrice * order.unit * PRICE_UNIT;
-
-    uint256 totalFee = (loserAmount * bvs.commissionfee) / BASE;
-
-    // Release winner's escrow (no fee)
-    bvs.clearingHouse.releaseFromEscrow(
-      address(this),
-      winner,
-      order.epoch,
-      order.idx,
-      winnerAmount,
-      0
-    );
-
-    // Release loser's escrow (with total fee)
-    bvs.clearingHouse.releaseFromEscrow(
-      address(this),
-      loser,
-      order.epoch,
-      order.idx,
-      loserAmount,
-      totalFee
-    );
-
-    // Transfer loser's amount to winner (after fee)
-    uint256 transferAmount = loserAmount - totalFee;
-    if (transferAmount > 0) {
-      bvs.clearingHouse.subtractUserBalance(loser, transferAmount);
-      bvs.clearingHouse.addUserBalance(winner, transferAmount);
-    }
-
-    _emitSettlement(
-      order.idx,
-      order.epoch,
-      loser,
-      bvs.clearingHouse.userBalances(loser) + loserAmount,
-      bvs.clearingHouse.userBalances(loser),
-      0
-    );
-    _emitSettlement(
-      order.idx,
-      order.epoch,
-      winner,
-      bvs.clearingHouse.userBalances(winner) - transferAmount,
-      bvs.clearingHouse.userBalances(winner),
-      0
-    );
-
-    bvs.settlementResults[order.idx] = SettlementResult({
-      idx: order.idx,
-      winPosition: winPosition,
-      winAmount: loserAmount,
-      feeRate: bvs.commissionfee,
-      fee: totalFee
-    });
-
-    return totalFee;
-  }
-
-  function _transferRedeemedAmountsToVault(FilledOrder storage order) internal {
-    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    if (order.underRedeemed > 0) {
-      uint256 redeemedAmount = order.underPrice * order.underRedeemed * PRICE_UNIT;
-      bvs.clearingHouse.subtractUserBalance(order.underUser, redeemedAmount);
-      bvs.clearingHouse.addUserBalance(bvs.redeemVault, redeemedAmount);
-    }
-    if (order.overRedeemed > 0) {
-      uint256 redeemedAmount = order.overPrice * order.overRedeemed * PRICE_UNIT;
-      bvs.clearingHouse.subtractUserBalance(order.overUser, redeemedAmount);
-      bvs.clearingHouse.addUserBalance(bvs.redeemVault, redeemedAmount);
-    }
+    return LibBaseVolStrike.settleFilledOrder(round, order);
   }
 
   function _fillSettlementResult(Round storage round, FilledOrder storage order) internal {
@@ -373,6 +198,29 @@ contract OrderProcessingFacet is ReentrancyGuard {
         feeRate: bvs.commissionfee,
         fee: 0
       });
+    }
+  }
+
+  event OrderSettled(
+    address indexed user,
+    uint256 indexed idx,
+    uint256 epoch,
+    uint256 prevBalance,
+    uint256 newBalance,
+    uint256 usedCouponAmount
+  );
+
+  function _transferRedeemedAmountsToVault(FilledOrder storage order) internal {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    if (order.underRedeemed > 0) {
+      uint256 redeemedAmount = order.underPrice * order.underRedeemed * PRICE_UNIT;
+      bvs.clearingHouse.subtractUserBalance(order.underUser, redeemedAmount);
+      bvs.clearingHouse.addUserBalance(bvs.redeemVault, redeemedAmount);
+    }
+    if (order.overRedeemed > 0) {
+      uint256 redeemedAmount = order.overPrice * order.overRedeemed * PRICE_UNIT;
+      bvs.clearingHouse.subtractUserBalance(order.overUser, redeemedAmount);
+      bvs.clearingHouse.addUserBalance(bvs.redeemVault, redeemedAmount);
     }
   }
 

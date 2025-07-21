@@ -25,11 +25,6 @@ contract RoundManagementFacet {
     _;
   }
 
-  modifier whenNotPaused() {
-    // TODO: Implement pause functionality
-    _;
-  }
-
   function currentEpoch() external view returns (uint256) {
     return _epochAt(block.timestamp);
   }
@@ -38,7 +33,7 @@ contract RoundManagementFacet {
     PriceUpdateData[] calldata updateDataWithIds,
     uint64 initDate,
     bool skipSettlement
-  ) external payable whenNotPaused onlyOperator {
+  ) external payable onlyOperator {
     if ((initDate - _getStartTimestamp()) % _getIntervalSeconds() != 0)
       revert LibBaseVolStrike.InvalidInitDate();
 
@@ -244,8 +239,7 @@ contract RoundManagementFacet {
     FilledOrder[] storage orders = bvs.filledOrders[round.epoch];
     for (uint i = 0; i < orders.length; i++) {
       FilledOrder storage order = orders[i];
-      // collectedFee += _settleFilledOrder(round, order);
-      // TODO: Implement settlement logic
+      collectedFee += LibBaseVolStrike.settleFilledOrder(round, order);
     }
 
     emit RoundSettled(round.epoch, orders.length, collectedFee);

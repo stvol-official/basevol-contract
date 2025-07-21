@@ -5,10 +5,22 @@ import "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IVaultManager } from "../interfaces/IVaultManager.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
-import { Round, FilledOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo, RedeemRequest, TargetRedeemOrder, Position, PriceUpdateData, ManualPriceData } from "../types/Types.sol";
+import { Round, FilledOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo, RedeemRequest, TargetRedeemOrder, Position, PriceUpdateData, ManualPriceData, WinPosition } from "../types/Types.sol";
 
 library LibBaseVolStrike {
   bytes32 constant DIAMOND_STORAGE_POSITION = keccak256("basevol.diamond.storage");
+
+  uint256 private constant PRICE_UNIT = 1e6;
+  uint256 private constant BASE = 10000; // 100%
+
+  event OrderSettled(
+    address indexed user,
+    uint256 indexed idx,
+    uint256 epoch,
+    uint256 prevBalance,
+    uint256 newBalance,
+    uint256 usedCouponAmount
+  );
 
   struct DiamondStorage {
     IERC20 token; // Prediction token
@@ -42,6 +54,222 @@ library LibBaseVolStrike {
     }
   }
 
+  // Settlement functions
+  function settleFilledOrder(
+    Round storage round,
+    FilledOrder storage order
+  ) internal returns (uint256) {
+    if (order.isSettled) return 0;
+
+    DiamondStorage storage bvs = diamondStorage();
+    uint256 strikePrice = (round.startPrice[order.productId] * order.strike) / 10000;
+    bool isOverWin = strikePrice < round.endPrice[order.productId];
+    bool isUnderWin = strikePrice > round.endPrice[order.productId];
+
+    uint256 collectedFee = 0;
+    WinPosition winPosition;
+
+    if (order.overPrice + order.underPrice != 100) {
+      winPosition = WinPosition.Invalid;
+      if (order.overUser != order.underUser) {
+        bvs.clearingHouse.releaseFromEscrow(
+          address(this),
+          order.overUser,
+          order.epoch,
+          order.idx,
+          order.overPrice * order.unit * PRICE_UNIT,
+          0
+        );
+        bvs.clearingHouse.releaseFromEscrow(
+          address(this),
+          order.underUser,
+          order.epoch,
+          order.idx,
+          order.underPrice * order.unit * PRICE_UNIT,
+          0
+        );
+        _transferRedeemedAmountsToVault(order);
+        _emitSettlement(
+          order.idx,
+          order.epoch,
+          order.underUser,
+          bvs.clearingHouse.userBalances(order.underUser),
+          bvs.clearingHouse.userBalances(order.underUser),
+          0
+        );
+        _emitSettlement(
+          order.idx,
+          order.epoch,
+          order.overUser,
+          bvs.clearingHouse.userBalances(order.overUser),
+          bvs.clearingHouse.userBalances(order.overUser),
+          0
+        );
+      } else {
+        bvs.clearingHouse.releaseFromEscrow(
+          address(this),
+          order.overUser,
+          order.epoch,
+          order.idx,
+          (order.overPrice + order.underPrice) * order.unit * PRICE_UNIT,
+          0
+        );
+        _transferRedeemedAmountsToVault(order);
+      }
+    } else if (isOverWin) {
+      winPosition = WinPosition.Over;
+      collectedFee += _processWin(order.overUser, order.underUser, order, winPosition);
+    } else if (isUnderWin) {
+      winPosition = WinPosition.Under;
+      collectedFee += _processWin(order.underUser, order.overUser, order, winPosition);
+    } else {
+      // Tie case
+      uint256 overUserBalance = bvs.clearingHouse.userBalances(order.overUser);
+      uint256 underUserBalance = bvs.clearingHouse.userBalances(order.underUser);
+      winPosition = WinPosition.Tie;
+      bvs.clearingHouse.releaseFromEscrow(
+        address(this),
+        order.overUser,
+        order.epoch,
+        order.idx,
+        order.overPrice * order.unit * PRICE_UNIT,
+        0
+      );
+      bvs.clearingHouse.releaseFromEscrow(
+        address(this),
+        order.underUser,
+        order.epoch,
+        order.idx,
+        order.underPrice * order.unit * PRICE_UNIT,
+        0
+      );
+      _emitSettlement(
+        order.idx,
+        order.epoch,
+        order.overUser,
+        overUserBalance,
+        bvs.clearingHouse.userBalances(order.overUser),
+        0
+      );
+      _emitSettlement(
+        order.idx,
+        order.epoch,
+        order.underUser,
+        underUserBalance,
+        bvs.clearingHouse.userBalances(order.underUser),
+        0
+      );
+      bvs.settlementResults[order.idx] = SettlementResult({
+        idx: order.idx,
+        winPosition: WinPosition.Tie,
+        winAmount: 0,
+        feeRate: bvs.commissionfee,
+        fee: 0
+      });
+    }
+
+    order.isSettled = true;
+    return collectedFee;
+  }
+
+  function _processWin(
+    address winner,
+    address loser,
+    FilledOrder storage order,
+    WinPosition winPosition
+  ) private returns (uint256) {
+    DiamondStorage storage bvs = diamondStorage();
+
+    uint256 winnerAmount = winPosition == WinPosition.Over
+      ? order.overPrice * order.unit * PRICE_UNIT
+      : order.underPrice * order.unit * PRICE_UNIT;
+
+    uint256 loserAmount = winPosition == WinPosition.Over
+      ? order.underPrice * order.unit * PRICE_UNIT
+      : order.overPrice * order.unit * PRICE_UNIT;
+
+    uint256 totalFee = (loserAmount * bvs.commissionfee) / BASE;
+
+    // Release winner's escrow (no fee)
+    bvs.clearingHouse.releaseFromEscrow(
+      address(this),
+      winner,
+      order.epoch,
+      order.idx,
+      winnerAmount,
+      0
+    );
+
+    // Release loser's escrow (with total fee)
+    bvs.clearingHouse.releaseFromEscrow(
+      address(this),
+      loser,
+      order.epoch,
+      order.idx,
+      loserAmount,
+      totalFee
+    );
+
+    // Transfer loser's amount to winner (after fee)
+    uint256 transferAmount = loserAmount - totalFee;
+    if (transferAmount > 0) {
+      bvs.clearingHouse.subtractUserBalance(loser, transferAmount);
+      bvs.clearingHouse.addUserBalance(winner, transferAmount);
+    }
+
+    _emitSettlement(
+      order.idx,
+      order.epoch,
+      loser,
+      bvs.clearingHouse.userBalances(loser) + loserAmount,
+      bvs.clearingHouse.userBalances(loser),
+      0
+    );
+    _emitSettlement(
+      order.idx,
+      order.epoch,
+      winner,
+      bvs.clearingHouse.userBalances(winner) - transferAmount,
+      bvs.clearingHouse.userBalances(winner),
+      0
+    );
+
+    bvs.settlementResults[order.idx] = SettlementResult({
+      idx: order.idx,
+      winPosition: winPosition,
+      winAmount: loserAmount,
+      feeRate: bvs.commissionfee,
+      fee: totalFee
+    });
+
+    return totalFee;
+  }
+
+  function _transferRedeemedAmountsToVault(FilledOrder storage order) private {
+    DiamondStorage storage bvs = diamondStorage();
+    if (order.underRedeemed > 0) {
+      uint256 redeemedAmount = order.underPrice * order.underRedeemed * PRICE_UNIT;
+      bvs.clearingHouse.subtractUserBalance(order.underUser, redeemedAmount);
+      bvs.clearingHouse.addUserBalance(bvs.redeemVault, redeemedAmount);
+    }
+    if (order.overRedeemed > 0) {
+      uint256 redeemedAmount = order.overPrice * order.overRedeemed * PRICE_UNIT;
+      bvs.clearingHouse.subtractUserBalance(order.overUser, redeemedAmount);
+      bvs.clearingHouse.addUserBalance(bvs.redeemVault, redeemedAmount);
+    }
+  }
+
+  function _emitSettlement(
+    uint256 idx,
+    uint256 epoch,
+    address user,
+    uint256 prevBalance,
+    uint256 newBalance,
+    uint256 usedCouponAmount
+  ) private {
+    emit OrderSettled(user, idx, epoch, prevBalance, newBalance, usedCouponAmount);
+  }
+
   // Import all necessary errors from BaseVolErrors
   error InvalidAddress();
   error InvalidCommissionFee();
@@ -53,6 +281,7 @@ library LibBaseVolStrike {
   error InvalidAmount();
   error InvalidStrike();
   error InvalidPriceId();
+  error InvalidProductId();
   error InvalidSymbol();
   error PriceIdAlreadyExists();
   error ProductIdAlreadyExists();
