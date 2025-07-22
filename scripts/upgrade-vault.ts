@@ -7,8 +7,8 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-const DEPLOYED_PROXY = "0x5063560c167c6a9f0d35Ae7c8599BC93AFBA51c6"; // for testnet
-// const DEPLOYED_PROXY = "0x3EECcDA279Ce530E0107004cdE4f018E2513B006"; // for mainnet
+// const DEPLOYED_PROXY = "0x1A8B9822C98dF3F527b3D0a5e71CC45243F2f6F7"; // for testnet
+const DEPLOYED_PROXY = "0x3EECcDA279Ce530E0107004cdE4f018E2513B006"; // for mainnet
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -38,7 +38,7 @@ const upgrade = async () => {
     // Deploy contracts.
     const VaultFactory = await ethers.getContractFactory(contractName);
 
-    // await upgrades.forceImport(PROXY, VaultFactory, { kind: "uups" });
+    await upgrades.forceImport(PROXY, VaultFactory, { kind: "uups" });
     const contract = await upgrades.upgradeProxy(PROXY, VaultFactory, {
       kind: "uups",
       redeployImplementation: "always",
