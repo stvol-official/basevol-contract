@@ -22,4 +22,6 @@ interface IBaseVolErrors is ICommonErrors {
   error AlreadySettled();
   error InvalidStrike();
   error InvalidProductId();
+  error InsufficientVerificationFee(uint256 required, uint256 provided);
+  error InvalidChannel();
 }

@@ -3,7 +3,7 @@ pragma solidity ^0.8.4;
 
 import { LibBaseVolStrike } from "../libraries/LibBaseVolStrike.sol";
 import { LibDiamond } from "../libraries/LibDiamond.sol";
-import { PriceUpdateData, ManualPriceData, Round, FilledOrder, Position } from "../types/Types.sol";
+import { PriceUpdateData, PriceData, Round, FilledOrder, Position } from "../types/Types.sol";
 import { PythStructs } from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -88,7 +88,7 @@ contract RoundManagementFacet {
   }
 
   function setManualRoundEndPrices(
-    ManualPriceData[] calldata manualPrices,
+    PriceData[] calldata priceData,
     uint64 initDate,
     bool skipSettlement
   ) external onlyOperator {
@@ -120,16 +120,14 @@ contract RoundManagementFacet {
     ) {
       problemRound.endTimestamp = initDate + _getIntervalSeconds();
 
-      for (uint i = 0; i < manualPrices.length; i++) {
-        ManualPriceData calldata priceData = manualPrices[i];
-        problemRound.endPrice[priceData.productId] = priceData.price;
-        if (
-          nextRound.epoch <= currentEpochNumber && nextRound.startPrice[priceData.productId] == 0
-        ) {
-          nextRound.startPrice[priceData.productId] = priceData.price;
+      for (uint i = 0; i < priceData.length; i++) {
+        PriceData calldata data = priceData[i];
+        problemRound.endPrice[data.productId] = data.price;
+        if (nextRound.epoch <= currentEpochNumber && nextRound.startPrice[data.productId] == 0) {
+          nextRound.startPrice[data.productId] = data.price;
         }
 
-        emit EndRound(problemEpoch, priceData.productId, priceData.price, initDate);
+        emit EndRound(problemEpoch, data.productId, data.price, initDate);
       }
       problemRound.isSettled = true;
     }

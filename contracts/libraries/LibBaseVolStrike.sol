@@ -5,7 +5,7 @@ import "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IVaultManager } from "../interfaces/IVaultManager.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
-import { Round, FilledOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo, RedeemRequest, TargetRedeemOrder, Position, PriceUpdateData, ManualPriceData, WinPosition } from "../types/Types.sol";
+import { Round, FilledOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo, RedeemRequest, TargetRedeemOrder, Position, PriceUpdateData, PriceData, WinPosition } from "../types/Types.sol";
 
 library LibBaseVolStrike {
   bytes32 constant DIAMOND_STORAGE_POSITION = keccak256("basevol.diamond.storage");
