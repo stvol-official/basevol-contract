@@ -59,6 +59,7 @@ struct RedeemRequest {
 }
 
 struct RedeemPairs {
+  uint256 idx;
   uint256 epoch;
   uint256 productId;
   uint256 strike;

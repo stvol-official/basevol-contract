@@ -289,6 +289,13 @@ library LibBaseVolStrike {
   error InvalidEpoch();
   error EpochHasNotStartedYet();
 
+  // Specific errors for redeemPairs debugging
+  error InvalidOverUnitsSum();
+  error InvalidUnderUnitsSum();
+  error InsufficientOverRedeemable();
+  error InsufficientUnderRedeemable();
+  error CommissionExceedsRedemption();
+
   // Access control modifiers
   modifier onlyAdmin() {
     require(msg.sender == diamondStorage().adminAddress, "Only admin");
