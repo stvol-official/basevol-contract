@@ -180,17 +180,53 @@ library LibBaseVolStrike {
   ) private returns (uint256) {
     DiamondStorage storage bvs = diamondStorage();
 
-    uint256 winnerAmount = winPosition == WinPosition.Over
+    uint256 winnerAmount = order.overUser == winner
       ? order.overPrice * order.unit * PRICE_UNIT
       : order.underPrice * order.unit * PRICE_UNIT;
 
-    uint256 loserAmount = winPosition == WinPosition.Over
-      ? order.underPrice * order.unit * PRICE_UNIT
-      : order.overPrice * order.unit * PRICE_UNIT;
+    uint256 loserAmount = order.overUser == loser
+      ? order.overPrice * order.unit * PRICE_UNIT
+      : order.underPrice * order.unit * PRICE_UNIT;
+    uint256 fee = (loserAmount * bvs.commissionfee) / BASE;
 
-    uint256 totalFee = (loserAmount * bvs.commissionfee) / BASE;
+    // Calculate redeem ratio
+    uint256 winnerRedeemed = (winPosition == WinPosition.Over)
+      ? order.overRedeemed
+      : order.underRedeemed;
+    uint256 redeemRatio = winnerRedeemed > 0 ? (winnerRedeemed * PRICE_UNIT) / order.unit : 0;
 
-    // Release winner's escrow (no fee)
+    // Split loser's amount (winning profit) based on redeem ratio
+    uint256 vaultWinAmount = (loserAmount * redeemRatio) / PRICE_UNIT;
+    uint256 userWinAmount = loserAmount - vaultWinAmount;
+    uint256 vaultFee = (fee * redeemRatio) / PRICE_UNIT;
+    uint256 userFee = fee - vaultFee;
+
+    // Transfer loser's escrow to redeemVault and winner based on redeem ratio
+    if (vaultWinAmount > 0) {
+      bvs.clearingHouse.settleEscrowWithFee(
+        address(this),
+        loser,
+        bvs.redeemVault,
+        order.epoch,
+        vaultWinAmount,
+        order.idx,
+        vaultFee
+      );
+    }
+
+    if (userWinAmount > 0) {
+      bvs.clearingHouse.settleEscrowWithFee(
+        address(this),
+        loser,
+        winner,
+        order.epoch,
+        userWinAmount,
+        order.idx,
+        userFee
+      );
+    }
+
+    // Release winner's original escrow to winner first
     bvs.clearingHouse.releaseFromEscrow(
       address(this),
       winner,
@@ -200,49 +236,68 @@ library LibBaseVolStrike {
       0
     );
 
-    // Release loser's escrow (with total fee)
-    bvs.clearingHouse.releaseFromEscrow(
-      address(this),
-      loser,
-      order.epoch,
-      order.idx,
-      loserAmount,
-      totalFee
-    );
-
-    // Transfer loser's amount to winner (after fee)
-    uint256 transferAmount = loserAmount - totalFee;
-    if (transferAmount > 0) {
-      bvs.clearingHouse.subtractUserBalance(loser, transferAmount);
-      bvs.clearingHouse.addUserBalance(winner, transferAmount);
+    // Then transfer redeem portion from winner to redeemVault
+    if (redeemRatio > 0) {
+      uint256 redeemAmount = (winnerAmount * redeemRatio) / PRICE_UNIT;
+      if (redeemAmount > 0) {
+        bvs.clearingHouse.subtractUserBalance(winner, redeemAmount);
+        bvs.clearingHouse.addUserBalance(bvs.redeemVault, redeemAmount);
+      }
     }
 
+    // Get coupon information for events
+    uint256 usedCoupon = bvs.clearingHouse.escrowCoupons(
+      address(this),
+      order.epoch,
+      loser,
+      order.idx
+    );
+
+    // Emit settlement events for loser
     _emitSettlement(
       order.idx,
       order.epoch,
       loser,
       bvs.clearingHouse.userBalances(loser) + loserAmount,
       bvs.clearingHouse.userBalances(loser),
-      0
+      usedCoupon
     );
+
+    // Calculate final amounts for events
+    uint256 vaultWinnerAmount = redeemRatio > 0 ? (winnerAmount * redeemRatio) / PRICE_UNIT : 0;
+    uint256 winnerTotalReceived = userWinAmount + (winnerAmount - vaultWinnerAmount);
+
+    // Emit settlement event for winner
     _emitSettlement(
       order.idx,
       order.epoch,
       winner,
-      bvs.clearingHouse.userBalances(winner) - transferAmount,
+      bvs.clearingHouse.userBalances(winner) - winnerTotalReceived,
       bvs.clearingHouse.userBalances(winner),
       0
     );
+
+    // Emit settlement event for redeemVault if applicable
+    if (vaultWinAmount > 0 || vaultWinnerAmount > 0) {
+      uint256 vaultTotalReceived = vaultWinAmount + vaultWinnerAmount;
+      _emitSettlement(
+        order.idx,
+        order.epoch,
+        bvs.redeemVault,
+        bvs.clearingHouse.userBalances(bvs.redeemVault) - vaultTotalReceived,
+        bvs.clearingHouse.userBalances(bvs.redeemVault),
+        0
+      );
+    }
 
     bvs.settlementResults[order.idx] = SettlementResult({
       idx: order.idx,
       winPosition: winPosition,
       winAmount: loserAmount,
       feeRate: bvs.commissionfee,
-      fee: totalFee
+      fee: fee
     });
-
-    return totalFee;
+    return fee;
   }
 
   function _transferRedeemedAmountsToVault(FilledOrder storage order) private {
