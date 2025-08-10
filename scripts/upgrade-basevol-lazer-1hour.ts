@@ -7,8 +7,10 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-const DEPLOYED_PROXY = "0xBcaC3552EC63cb03363B33bC9182eb594e209FC7"; // for testnet
-const PYTH_LAZER_LIB_ADDRESS = "0x9F75E45a06FA4bd0a89f97e606EfC24A64916750"; // for testnet
+const DEPLOYED_PROXY = "0x26b0A1e85f66C4864d6ABB3B146714494B56A673"; // for testnet
+const PYTH_LAZER_LIB_ADDRESS = "0xB399824A08b1BECb58a499ac1D987f7441317204"; // for testnet
+// const DEPLOYED_PROXY = "0xD340fEC755B03615543Cf25676847194Be18b91E"; // for mainnet
+// const PYTH_LAZER_LIB_ADDRESS = "0x798f4c5c88677d38F46D9Aa70F2ae32187AA9069"; // for mainnet
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
