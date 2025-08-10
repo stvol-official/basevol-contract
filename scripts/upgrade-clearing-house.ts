@@ -7,7 +7,7 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-const DEPLOYED_PROXY = "0xB48434a7160AAC2C4e5cdB3C3Cc2Ecfd83c6E292"; // for testnet
+const DEPLOYED_PROXY = "0x813fbbBb2BBde225389220A3E4d436EE73F3c172"; // for testnet
 // const DEPLOYED_PROXY = "0x24Ea761cc6b9941ADff142ba5C75E025D56E12D2"; // for mainnet
 
 function sleep(ms: number) {

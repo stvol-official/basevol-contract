@@ -457,12 +457,26 @@ contract ClearingHouse is
   function addUserBalance(address user, uint256 amount) external nonReentrant onlyOperator {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     $.userBalances[user] += amount;
+
+    address[] memory products = $.productAddresses;
+    for (uint256 i = 0; i < products.length; i++) {
+      if ($.vaultManager.isVault(products[i], user)) {
+        $.vaultManager.addVaultBalance(products[i], user, amount);
+      }
+    }
   }
 
   function subtractUserBalance(address user, uint256 amount) external nonReentrant onlyOperator {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     if ($.userBalances[user] < amount) revert InsufficientBalance();
     $.userBalances[user] -= amount;
+
+    address[] memory products = $.productAddresses;
+    for (uint256 i = 0; i < products.length; i++) {
+      if ($.vaultManager.isVault(products[i], user)) {
+        $.vaultManager.subtractVaultBalance(products[i], user, amount);
+      }
+    }
   }
 
   function addOperator(address operator) external onlyAdmin {
