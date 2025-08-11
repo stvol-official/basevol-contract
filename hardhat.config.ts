@@ -25,7 +25,7 @@ export default {
       chainId: 31337,
     },
     base: {
-      url: `https://mainnet.base.org`,
+      url: `https://base-mainnet.g.alchemy.com/v2/S3nJdF7A6nxs3PumHSmfKdHYslDADVvo`,
       gas: 22000000,
       allowUnlimitedContractSize: true,
       accounts: {

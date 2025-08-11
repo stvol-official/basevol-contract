@@ -7,10 +7,10 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-const DEPLOYED_PROXY = "0x26b0A1e85f66C4864d6ABB3B146714494B56A673"; // for testnet
-const PYTH_LAZER_LIB_ADDRESS = "0xB399824A08b1BECb58a499ac1D987f7441317204"; // for testnet
-// const DEPLOYED_PROXY = "0xD340fEC755B03615543Cf25676847194Be18b91E"; // for mainnet
-// const PYTH_LAZER_LIB_ADDRESS = "0x798f4c5c88677d38F46D9Aa70F2ae32187AA9069"; // for mainnet
+// const DEPLOYED_PROXY = "0x26b0A1e85f66C4864d6ABB3B146714494B56A673"; // for testnet
+// const PYTH_LAZER_LIB_ADDRESS = "0xB399824A08b1BECb58a499ac1D987f7441317204"; // for testnet
+const DEPLOYED_PROXY = "0xD340fEC755B03615543Cf25676847194Be18b91E"; // for mainnet
+const PYTH_LAZER_LIB_ADDRESS = "0x798f4c5c88677d38F46D9Aa70F2ae32187AA9069"; // for mainnet
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -73,7 +73,7 @@ const upgrade = async () => {
         unsafeAllowLinkedLibraries: true,
       });
       baseVolContractAddress = baseVolContract;
-      console.log(`�� New implementation contract deployed at: ${baseVolContract}`);
+      console.log(`New implementation contract deployed at: ${baseVolContract}`);
       console.log("Use this address in your Safe transaction to upgrade the proxy");
 
       /**

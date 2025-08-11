@@ -29,7 +29,7 @@ abstract contract BaseVolStrike is
 
   uint256 private constant PRICE_UNIT = 1e6;
   uint256 private constant BASE = 10000; // 100%
-  uint256 private constant MAX_COMMISSION_FEE = 500; // 5%
+  uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
   uint256 private constant BUFFER_SECONDS = 600; // 10 * 60 (10min)
 
   // Abstract functions
