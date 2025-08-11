@@ -14,6 +14,8 @@ const mnemonic = fs.existsSync(".secret")
   ? fs.readFileSync(".secret").toString().trim()
   : "test test test test test test test test test test test junk";
 
+const apiKey = process.env.ALCHEMY_API_KEY;
+
 // You need to export an object to set up your config
 // Go to https://hardhat.org/config/ to learn more
 export default {
@@ -25,7 +27,7 @@ export default {
       chainId: 31337,
     },
     base: {
-      url: `https://mainnet.base.org`,
+      url: `https://base-mainnet.g.alchemy.com/v2/${apiKey}`,
       gas: 22000000,
       allowUnlimitedContractSize: true,
       accounts: {
@@ -34,7 +36,7 @@ export default {
       chainId: 8453,
     },
     base_sepolia: {
-      url: `https://base-sepolia.g.alchemy.com/v2/S3nJdF7A6nxs3PumHSmfKdHYslDADVvo`,
+      url: `https://base-sepolia.g.alchemy.com/v2/${apiKey}`,
       gas: 22000000,
       allowUnlimitedContractSize: true,
       accounts: {
