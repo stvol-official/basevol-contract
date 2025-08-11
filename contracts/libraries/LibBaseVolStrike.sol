@@ -5,7 +5,8 @@ import "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IVaultManager } from "../interfaces/IVaultManager.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
-import { Round, FilledOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo, RedeemRequest, TargetRedeemOrder, Position, PriceUpdateData, ManualPriceData, WinPosition } from "../types/Types.sol";
+import { Round, FilledOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo, RedeemRequest, TargetRedeemOrder, Position, PriceUpdateData, PriceData, WinPosition } from "../types/Types.sol";
+import { PythLazer } from "../libraries/PythLazer.sol";
 
 library LibBaseVolStrike {
   bytes32 constant DIAMOND_STORAGE_POSITION = keccak256("basevol.diamond.storage");
@@ -44,6 +45,7 @@ library LibBaseVolStrike {
     address redeemVault; // vault address for redeeming
     uint256 startTimestamp; // Contract start timestamp
     uint256 intervalSeconds; // Round interval in seconds
+    PythLazer pythLazer;
     /* IMPROTANT: you can add new variables here */
   }
 
@@ -343,6 +345,8 @@ library LibBaseVolStrike {
   error InvalidTokenAddress();
   error InvalidEpoch();
   error EpochHasNotStartedYet();
+  error InsufficientVerificationFee();
+  error InvalidChannel();
 
   // Specific errors for redeemPairs debugging
   error InvalidOverUnitsSum();

@@ -7,6 +7,7 @@ import { PriceInfo } from "../types/Types.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IPyth } from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
+import { PythLazer } from "../libraries/PythLazer.sol";
 
 contract AdminFacet {
   using LibBaseVolStrike for LibBaseVolStrike.DiamondStorage;
@@ -26,6 +27,12 @@ contract AdminFacet {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     require(msg.sender == bvs.operatorAddress, "Only operator");
     _;
+  }
+
+  function setPythLazer(address _pythLazer) external onlyAdmin {
+    if (_pythLazer == address(0)) revert LibBaseVolStrike.InvalidAddress();
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    bvs.pythLazer = PythLazer(_pythLazer);
   }
 
   function retrieveMisplacedETH() external onlyAdmin {

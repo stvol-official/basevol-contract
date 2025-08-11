@@ -6,6 +6,7 @@ import { LibDiamond } from "../libraries/LibDiamond.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IPyth } from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
+import { PythLazer } from "../libraries/PythLazer.sol";
 import { PriceInfo } from "../types/Types.sol";
 
 contract InitializationFacet {
@@ -32,6 +33,7 @@ contract InitializationFacet {
 
     bvs.token = IERC20(_usdcAddress);
     bvs.oracle = IPyth(_oracleAddress);
+    bvs.pythLazer = PythLazer(0xACeA761c27A909d4D3895128EBe6370FDE2dF481);
     bvs.clearingHouse = IClearingHouse(_clearingHouseAddress);
     bvs.adminAddress = _adminAddress;
     bvs.operatorAddress = _operatorAddress;

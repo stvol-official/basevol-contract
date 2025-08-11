@@ -3,10 +3,13 @@ pragma solidity ^0.8.4;
 
 import { LibBaseVolStrike } from "../libraries/LibBaseVolStrike.sol";
 import { LibDiamond } from "../libraries/LibDiamond.sol";
-import { PriceUpdateData, ManualPriceData, Round, FilledOrder, Position } from "../types/Types.sol";
+import { PriceUpdateData, PriceData, Round, FilledOrder, Position } from "../types/Types.sol";
 import { PythStructs } from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { PythLazer } from "../libraries/PythLazer.sol";
+import { PythLazerLib } from "../libraries/PythLazerLib.sol";
+import { PriceLazerData } from "../types/Types.sol";
 
 contract RoundManagementFacet {
   using LibBaseVolStrike for LibBaseVolStrike.DiamondStorage;
@@ -30,14 +33,14 @@ contract RoundManagementFacet {
   }
 
   function executeRound(
-    PriceUpdateData[] calldata updateDataWithIds,
+    PriceLazerData calldata priceLazerData,
     uint64 initDate,
     bool skipSettlement
   ) external payable onlyOperator {
     if ((initDate - _getStartTimestamp()) % _getIntervalSeconds() != 0)
       revert LibBaseVolStrike.InvalidInitDate();
 
-    PythStructs.PriceFeed[] memory feeds = _getPythPrices(updateDataWithIds, initDate);
+    PriceData[] memory priceData = _processPythLazerPriceUpdate(priceLazerData);
 
     uint256 startEpoch = _epochAt(initDate);
     uint256 currentEpochNumber = _epochAt(block.timestamp);
@@ -52,9 +55,10 @@ contract RoundManagementFacet {
       round.endTimestamp = initDate + _getIntervalSeconds();
       round.isStarted = true;
     }
-    for (uint i = 0; i < feeds.length; i++) {
-      uint256 productId = updateDataWithIds[i].productId;
-      uint64 pythPrice = uint64(feeds[i].price.price);
+
+    for (uint i = 0; i < priceData.length; i++) {
+      uint256 productId = priceData[i].productId;
+      uint64 pythPrice = priceData[i].price;
       if (round.startPrice[productId] == 0) {
         round.startPrice[productId] = pythPrice;
         emit StartRound(startEpoch, productId, pythPrice, initDate);
@@ -73,9 +77,10 @@ contract RoundManagementFacet {
       prevRound.endTimestamp = initDate;
       prevRound.isSettled = true;
     }
-    for (uint i = 0; i < feeds.length; i++) {
-      uint256 productId = updateDataWithIds[i].productId;
-      uint64 pythPrice = uint64(feeds[i].price.price);
+
+    for (uint i = 0; i < priceData.length; i++) {
+      uint256 productId = priceData[i].productId;
+      uint64 pythPrice = priceData[i].price;
       if (prevRound.endPrice[productId] == 0) {
         prevRound.endPrice[productId] = pythPrice;
         emit EndRound(prevEpoch, productId, pythPrice, initDate);
@@ -88,7 +93,7 @@ contract RoundManagementFacet {
   }
 
   function setManualRoundEndPrices(
-    ManualPriceData[] calldata manualPrices,
+    PriceData[] calldata priceData,
     uint64 initDate,
     bool skipSettlement
   ) external onlyOperator {
@@ -120,16 +125,14 @@ contract RoundManagementFacet {
     ) {
       problemRound.endTimestamp = initDate + _getIntervalSeconds();
 
-      for (uint i = 0; i < manualPrices.length; i++) {
-        ManualPriceData calldata priceData = manualPrices[i];
-        problemRound.endPrice[priceData.productId] = priceData.price;
-        if (
-          nextRound.epoch <= currentEpochNumber && nextRound.startPrice[priceData.productId] == 0
-        ) {
-          nextRound.startPrice[priceData.productId] = priceData.price;
+      for (uint i = 0; i < priceData.length; i++) {
+        PriceData calldata data = priceData[i];
+        problemRound.endPrice[data.productId] = data.price;
+        if (nextRound.epoch <= currentEpochNumber && nextRound.startPrice[data.productId] == 0) {
+          nextRound.startPrice[data.productId] = data.price;
         }
 
-        emit EndRound(problemEpoch, priceData.productId, priceData.price, initDate);
+        emit EndRound(problemEpoch, data.productId, data.price, initDate);
       }
       problemRound.isSettled = true;
     }
@@ -228,6 +231,76 @@ contract RoundManagementFacet {
         timestamp,
         timestamp + uint64(BUFFER_SECONDS)
       );
+  }
+
+  function _processPythLazerPriceUpdate(
+    PriceLazerData memory priceLazerData
+  ) internal returns (PriceData[] memory) {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+
+    uint256 verificationFee = bvs.pythLazer.verification_fee();
+    if (msg.value < verificationFee) {
+      revert LibBaseVolStrike.InsufficientVerificationFee();
+    }
+
+    (bytes memory payload, ) = bvs.pythLazer.verifyUpdate{ value: verificationFee }(
+      priceLazerData.priceData
+    );
+    if (msg.value > verificationFee) {
+      payable(msg.sender).transfer(msg.value - verificationFee);
+    }
+
+    (, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib.parsePayloadHeader(
+      payload
+    );
+    if (channel != PythLazerLib.Channel.RealTime) {
+      revert LibBaseVolStrike.InvalidChannel();
+    }
+
+    PriceData[] memory tempData = new PriceData[](feedsLen);
+    uint256 validCount = 0;
+
+    for (uint8 i = 0; i < feedsLen; i++) {
+      uint32 feedId;
+      uint8 numProperties;
+      (feedId, numProperties, pos) = PythLazerLib.parseFeedHeader(payload, pos);
+
+      uint64 price = 0;
+      bool priceFound = false;
+
+      for (uint8 j = 0; j < numProperties; j++) {
+        PythLazerLib.PriceFeedProperty property;
+        (property, pos) = PythLazerLib.parseFeedProperty(payload, pos);
+        if (property == PythLazerLib.PriceFeedProperty.Price) {
+          (price, pos) = PythLazerLib.parseFeedValueUint64(payload, pos);
+          priceFound = true;
+        }
+      }
+
+      if (priceFound && price > 0) {
+        uint256 productId = type(uint256).max;
+        for (uint256 k = 0; k < priceLazerData.mappings.length; k++) {
+          if (priceLazerData.mappings[k].priceFeedId == uint256(feedId)) {
+            productId = priceLazerData.mappings[k].productId;
+            break;
+          }
+        }
+
+        // Check if productId is valid and price is reasonable
+        if (productId != type(uint256).max) {
+          tempData[validCount] = PriceData({ productId: productId, price: price });
+          validCount++;
+        }
+      }
+    }
+
+    PriceData[] memory priceData = new PriceData[](validCount);
+
+    for (uint256 i = 0; i < validCount; i++) {
+      priceData[i] = tempData[i];
+    }
+
+    return priceData;
   }
 
   function _settleFilledOrders(Round storage round) internal {

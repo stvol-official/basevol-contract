@@ -7,13 +7,13 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
-import "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
+import { PythLazer } from "../libraries/PythLazer.sol";
+import { PythLazerLib } from "../libraries/PythLazerLib.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
 import { BaseVolOneMinStorage } from "../storage/BaseVolOneMinStorage.sol";
-import { Round, Coupon, WithdrawalRequest, ProductRound, SettlementResult, WinPosition, OneMinOrder, Position, ClosingOneMinOrder, PriceInfo, PriceUpdateData } from "../types/Types.sol";
+import { Round, Coupon, WithdrawalRequest, ProductRound, SettlementResult, WinPosition, OneMinOrder, Position, ClosingOneMinOrder, PriceInfo, PriceUpdateData, PriceLazerData } from "../types/Types.sol";
 import { IBaseVolErrors } from "../errors/BaseVolErrors.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
@@ -82,7 +82,6 @@ contract BaseVolOneMin is
 
   function initialize(
     address _usdcAddress,
-    address _oracleAddress,
     address _adminAddress,
     address _operatorAddress,
     address _clearingHouseAddress
@@ -95,15 +94,12 @@ contract BaseVolOneMin is
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
 
     $.token = IERC20(_usdcAddress);
-    $.oracle = IPyth(_oracleAddress);
     $.clearingHouse = IClearingHouse(_clearingHouseAddress);
+    $.pythLazer = PythLazer(0xACeA761c27A909d4D3895128EBe6370FDE2dF481);
     $.adminAddress = _adminAddress;
     $.operatorAddresses.push(_operatorAddress);
     $.commissionfees[0] = 1000; // btc
     $.commissionfees[1] = 1000; // eth
-
-    _addPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
-    _addPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");
   }
 
   function currentEpoch() external view returns (uint256) {
@@ -111,22 +107,14 @@ contract BaseVolOneMin is
   }
 
   function updatePrice(
-    PriceUpdateData[] calldata updateDataWithIds,
+    PriceLazerData calldata priceLazerData,
     uint64 timestamp
   ) external payable onlyOperator {
     // timestamp should be either XX:00
     if (timestamp % ROUND_INTERVAL != 0) revert InvalidTime();
 
-    PythStructs.PriceFeed[] memory feeds = _getPythPrices(updateDataWithIds, timestamp);
-
-    BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
-
-    // Store price history
-    for (uint i = 0; i < feeds.length; i++) {
-      uint256 productId = updateDataWithIds[i].productId;
-      uint64 pythPrice = uint64(feeds[i].price.price);
-      $.priceHistory[timestamp][productId] = pythPrice;
-    }
+    // update price and store
+    _processPythLazerPriceUpdate(priceLazerData, timestamp);
     emit DebugLog(string.concat("Price updated for timestamp: ", Strings.toString(timestamp)));
   }
 
@@ -499,10 +487,10 @@ contract BaseVolOneMin is
     }
   }
 
-  function setOracle(address _oracle) external whenPaused onlyAdmin {
-    if (_oracle == address(0)) revert InvalidAddress();
+  function setPythLazer(address _pythLazer) external whenPaused onlyOperator {
+    if (_pythLazer == address(0)) revert InvalidAddress();
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
-    $.oracle = IPyth(_oracle);
+    $.pythLazer = PythLazer(_pythLazer);
   }
 
   function setCommissionfee(uint256 productId, uint256 _commissionfee) external onlyOperator {
@@ -527,26 +515,6 @@ contract BaseVolOneMin is
     if (_vault == address(0)) revert InvalidAddress();
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
     $.vault = _vault;
-  }
-  function addPriceId(
-    bytes32 _priceId,
-    uint256 _productId,
-    string calldata _symbol
-  ) external onlyOperator {
-    _addPriceId(_priceId, _productId, _symbol);
-  }
-
-  function initializeDefaultPriceIds() external onlyOperator {
-    BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
-
-    if (
-      $.priceIdToProductId[0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43] ==
-      0 &&
-      $.priceInfos[0].priceId != 0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43
-    ) {
-      _addPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
-      _addPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");
-    }
   }
 
   /* public views */
@@ -598,38 +566,64 @@ contract BaseVolOneMin is
     return $.priceHistory[timestamp][productId];
   }
 
-  function priceInfos() external view returns (PriceInfo[] memory) {
-    BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
-    PriceInfo[] memory priceInfoArray = new PriceInfo[]($.priceIdCount);
-    for (uint256 i = 0; i < $.priceIdCount; i++) {
-      priceInfoArray[i] = $.priceInfos[i];
-    }
-    return priceInfoArray;
-  }
-
   /* internal functions */
-  function _getPythPrices(
-    PriceUpdateData[] memory updateDataWithIds,
+  function _processPythLazerPriceUpdate(
+    PriceLazerData memory priceLazerData,
     uint64 timestamp
-  ) internal returns (PythStructs.PriceFeed[] memory) {
+  ) internal {
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
 
-    bytes[] memory updateData = new bytes[](updateDataWithIds.length);
-    bytes32[] memory priceIds = new bytes32[](updateDataWithIds.length);
-
-    for (uint256 i = 0; i < updateDataWithIds.length; i++) {
-      updateData[i] = updateDataWithIds[i].priceData;
-      priceIds[i] = $.priceInfos[updateDataWithIds[i].productId].priceId;
+    uint256 verificationFee = $.pythLazer.verification_fee();
+    if (msg.value < verificationFee) {
+      revert InsufficientVerificationFee(verificationFee, msg.value);
     }
 
-    uint fee = $.oracle.getUpdateFee(updateData);
-    return
-      $.oracle.parsePriceFeedUpdates{ value: fee }(
-        updateData,
-        priceIds,
-        timestamp,
-        timestamp + uint64(BUFFER_SECONDS)
-      );
+    (bytes memory payload, ) = $.pythLazer.verifyUpdate{ value: verificationFee }(
+      priceLazerData.priceData
+    );
+    if (msg.value > verificationFee) {
+      payable(msg.sender).transfer(msg.value - verificationFee);
+    }
+
+    (, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib.parsePayloadHeader(
+      payload
+    );
+    if (channel != PythLazerLib.Channel.RealTime) {
+      revert InvalidChannel();
+    }
+
+    for (uint8 i = 0; i < feedsLen; i++) {
+      uint32 feedId;
+      uint8 numProperties;
+      (feedId, numProperties, pos) = PythLazerLib.parseFeedHeader(payload, pos);
+
+      uint64 price = 0;
+      bool priceFound = false;
+
+      for (uint8 j = 0; j < numProperties; j++) {
+        PythLazerLib.PriceFeedProperty property;
+        (property, pos) = PythLazerLib.parseFeedProperty(payload, pos);
+        if (property == PythLazerLib.PriceFeedProperty.Price) {
+          (price, pos) = PythLazerLib.parseFeedValueUint64(payload, pos);
+          priceFound = true;
+        }
+      }
+
+      if (priceFound && price > 0) {
+        uint256 productId = type(uint256).max;
+        for (uint256 k = 0; k < priceLazerData.mappings.length; k++) {
+          if (priceLazerData.mappings[k].priceFeedId == uint256(feedId)) {
+            productId = priceLazerData.mappings[k].productId;
+            break;
+          }
+        }
+
+        // Check if productId is valid and price is reasonable
+        if (productId != type(uint256).max) {
+          $.priceHistory[timestamp][productId] = price;
+        }
+      }
+    }
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -645,30 +639,5 @@ contract BaseVolOneMin is
     startTime = START_TIMESTAMP + (epoch * ROUND_INTERVAL);
     endTime = startTime + ROUND_DURATION;
     return (startTime, endTime);
-  }
-
-  function _addPriceId(bytes32 _priceId, uint256 _productId, string memory _symbol) internal {
-    BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
-    if (_priceId == bytes32(0)) revert InvalidPriceId();
-    if ($.priceIdToProductId[_priceId] != 0 || $.priceInfos[0].priceId == _priceId) {
-      revert PriceIdAlreadyExists();
-    }
-    if ($.priceInfos[_productId].priceId != bytes32(0)) {
-      revert ProductIdAlreadyExists();
-    }
-    if (bytes(_symbol).length == 0) {
-      revert InvalidSymbol();
-    }
-
-    $.priceInfos[_productId] = PriceInfo({
-      priceId: _priceId,
-      productId: _productId,
-      symbol: _symbol
-    });
-
-    $.priceIdToProductId[_priceId] = _productId;
-    $.priceIdCount++;
-
-    emit PriceIdAdded(_productId, _priceId, _symbol);
   }
 }
