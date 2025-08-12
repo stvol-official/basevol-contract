@@ -13,7 +13,7 @@ contract AdminFacet {
   using LibBaseVolStrike for LibBaseVolStrike.DiamondStorage;
   using SafeERC20 for IERC20;
 
-  uint256 private constant MAX_COMMISSION_FEE = 500; // 5%
+  uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
 
   event PriceIdAdded(uint256 indexed productId, bytes32 priceId, string symbol);
 

@@ -12,7 +12,7 @@ import { PriceInfo } from "../types/Types.sol";
 contract InitializationFacet {
   using LibBaseVolStrike for LibBaseVolStrike.DiamondStorage;
 
-  uint256 private constant MAX_COMMISSION_FEE = 500; // 5%
+  uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
 
   function initialize(
     address _usdcAddress,

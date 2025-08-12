@@ -30,7 +30,7 @@ export default {
     },
   },
   CommissionFee: {
-    base_sepolia: 490, // 4.9%
-    base: 490, // 4.9%
+    base_sepolia: 990, // 9.9%
+    base: 990, // 9.9%
   },
 };
