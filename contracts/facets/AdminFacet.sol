@@ -29,6 +29,11 @@ contract AdminFacet {
     _;
   }
 
+  modifier onlyOwner() {
+    LibDiamond.enforceIsContractOwner();
+    _;
+  }
+
   function setPythLazer(address _pythLazer) external onlyAdmin {
     if (_pythLazer == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
@@ -65,9 +70,7 @@ contract AdminFacet {
     bvs.commissionfee = _commissionfee;
   }
 
-  function setAdmin(address _adminAddress) external {
-    // Use LibDiamond for owner check
-    LibDiamond.enforceIsContractOwner();
+  function setAdmin(address _adminAddress) external onlyOwner {
     if (_adminAddress == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     bvs.adminAddress = _adminAddress;
@@ -77,6 +80,11 @@ contract AdminFacet {
     if (_token == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     bvs.token = IERC20(_token);
+  }
+
+  function setLastFilledOrderId(uint256 _lastFilledOrderId) external onlyOperator {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    bvs.lastFilledOrderId = _lastFilledOrderId;
   }
 
   function addPriceId(

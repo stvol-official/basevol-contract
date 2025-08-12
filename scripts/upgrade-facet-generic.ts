@@ -13,7 +13,7 @@ type SupportedNetwork = (typeof NETWORK)[number];
 
 // Diamond addresses by network
 const DIAMOND_ADDRESSES = {
-  base_sepolia: "0x1Fc3D6502BdF2B52a4d0d61dcB2E119A46baf3d7", // Update after deployment
+  base_sepolia: "0x66ee6506eD99859d340690d98a92db239909DF89", // Update after deployment
   base: "", // Update after deployment
 };
 
