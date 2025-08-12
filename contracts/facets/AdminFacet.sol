@@ -17,6 +17,11 @@ contract AdminFacet {
 
   event PriceIdAdded(uint256 indexed productId, bytes32 priceId, string symbol);
 
+  modifier onlyOwner() {
+    LibDiamond.enforceIsContractOwner();
+    _;
+  }
+
   modifier onlyAdmin() {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     require(msg.sender == bvs.adminAddress, "Only admin");
@@ -26,11 +31,6 @@ contract AdminFacet {
   modifier onlyOperator() {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     require(msg.sender == bvs.operatorAddress, "Only operator");
-    _;
-  }
-
-  modifier onlyOwner() {
-    LibDiamond.enforceIsContractOwner();
     _;
   }
 
