@@ -29,20 +29,24 @@ export default {
     base: {
       url: `https://base-mainnet.g.alchemy.com/v2/${apiKey}`,
       gas: 22000000,
+      gasPrice: "auto",
       allowUnlimitedContractSize: true,
       accounts: {
         mnemonic,
       },
       chainId: 8453,
+      timeout: 120000,
     },
     base_sepolia: {
       url: `https://base-sepolia.g.alchemy.com/v2/${apiKey}`,
       gas: 22000000,
+      gasPrice: "auto",
       allowUnlimitedContractSize: true,
       accounts: {
         mnemonic,
       },
       chainId: 84532,
+      timeout: 120000,
     },
   },
   solidity: {
