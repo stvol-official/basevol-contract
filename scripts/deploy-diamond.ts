@@ -53,24 +53,66 @@ export async function deployDiamond(
 
   console.log("Deploying Diamond with account:", deployer.address);
 
+  // Get initial nonce and track it manually
+  let nonce = await deployer.getNonce();
+  console.log("Starting nonce:", nonce);
+
+  // Helper function to wait for transaction and increment nonce
+  const waitAndIncrementNonce = async (tx: any) => {
+    const receipt = await tx.wait();
+    nonce++;
+    console.log(`Transaction confirmed. New nonce: ${nonce}`);
+    return receipt;
+  };
+
+  // Helper function to deploy contract with retry mechanism
+  const deployWithRetry = async (
+    contractFactory: any,
+    args: any[] = [],
+    maxRetries = 3,
+  ): Promise<any> => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Deployment attempt ${attempt}/${maxRetries} with nonce ${nonce}`);
+        const contract =
+          args.length > 0
+            ? await contractFactory.deploy(...args, { nonce })
+            : await contractFactory.deploy({ nonce });
+
+        await waitAndIncrementNonce(contract.deploymentTransaction());
+        return contract;
+      } catch (error: any) {
+        console.log(`Deployment attempt ${attempt} failed:`, error.message);
+
+        if (attempt === maxRetries) {
+          throw error;
+        }
+
+        // Update nonce from network in case of nonce mismatch
+        nonce = await deployer.getNonce();
+        console.log(`Updated nonce to: ${nonce}`);
+
+        // Wait before retry
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
+  };
+
   // 1. Deploy DiamondCutFacet
   const DiamondCutFacet = await ethers.getContractFactory("DiamondCutFacet");
-  const diamondCutFacet = await DiamondCutFacet.deploy();
-  await diamondCutFacet.waitForDeployment();
+  const diamondCutFacet = await deployWithRetry(DiamondCutFacet);
   const diamondCutFacetAddress = await diamondCutFacet.getAddress();
   console.log("DiamondCutFacet deployed to:", diamondCutFacetAddress);
 
   // 2. Deploy Diamond
   const Diamond = await ethers.getContractFactory("Diamond");
-  const diamond = await Diamond.deploy(deployer.address, diamondCutFacetAddress);
-  await diamond.waitForDeployment();
+  const diamond = await deployWithRetry(Diamond, [deployer.address, diamondCutFacetAddress]);
   const diamondAddress = await diamond.getAddress();
   console.log("Diamond deployed to:", diamondAddress);
 
   // 3. Deploy DiamondInit
   const DiamondInit = await ethers.getContractFactory("DiamondInit");
-  const diamondInit = await DiamondInit.deploy();
-  await diamondInit.waitForDeployment();
+  const diamondInit = await deployWithRetry(DiamondInit);
   const diamondInitAddress = await diamondInit.getAddress();
   console.log("DiamondInit deployed to:", diamondInitAddress);
 
@@ -90,8 +132,7 @@ export async function deployDiamond(
 
   for (const FacetName of facetNames) {
     const Facet = await ethers.getContractFactory(FacetName);
-    const facet = await Facet.deploy();
-    await facet.waitForDeployment();
+    const facet = await deployWithRetry(Facet);
 
     const facetAddress = await facet.getAddress();
     facetAddresses[FacetName] = facetAddress;
@@ -120,12 +161,40 @@ export async function deployDiamond(
 
   console.log("Cut:", cut);
 
-  const tx = await diamondCut.diamondCut(cut, await diamondInit.getAddress(), functionCall);
-  console.log("Diamond cut tx:", tx.hash);
+  // Execute diamond cut with retry mechanism
+  let receipt;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      console.log(`Diamond cut attempt ${attempt}/3 with nonce ${nonce}`);
+      const tx = await diamondCut.diamondCut(cut, await diamondInit.getAddress(), functionCall, {
+        nonce,
+      });
+      console.log("Diamond cut tx:", tx.hash);
 
-  const receipt = await tx.wait();
+      receipt = await waitAndIncrementNonce(tx);
+      if (receipt && receipt.status === 1) {
+        break;
+      } else {
+        throw new Error(`Diamond cut failed with status: ${receipt?.status}`);
+      }
+    } catch (error: any) {
+      console.log(`Diamond cut attempt ${attempt} failed:`, error.message);
+
+      if (attempt === 3) {
+        throw error;
+      }
+
+      // Update nonce from network in case of nonce mismatch
+      nonce = await deployer.getNonce();
+      console.log(`Updated nonce to: ${nonce}`);
+
+      // Wait before retry
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
+
   if (!receipt || receipt.status !== 1) {
-    throw Error(`Diamond upgrade failed: ${tx.hash}`);
+    throw Error(`Diamond upgrade failed after all retries`);
   }
 
   console.log("Diamond cut completed");
