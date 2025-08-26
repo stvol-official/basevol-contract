@@ -188,9 +188,10 @@ contract GenesisStrategy is
   /// @dev Only callable by BaseVolManager
   /// @param amount The amount that was deposited
   /// @param success Whether the deposit was successful
-  function onDepositCompleted(uint256 amount, bool success) external {
-    require(msg.sender == address(baseVolManager()), "Only BaseVolManager");
-
+  function depositCompletedCallback(
+    uint256 amount,
+    bool success
+  ) external authCaller(baseVolManager()) nonReentrant {
     if (success) {
       // Update strategy state
       GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
@@ -208,9 +209,10 @@ contract GenesisStrategy is
   /// @dev Only callable by BaseVolManager
   /// @param amount The amount that was withdrawn
   /// @param success Whether the withdraw was successful
-  function onWithdrawCompleted(uint256 amount, bool success) external {
-    require(msg.sender == address(baseVolManager()), "Only BaseVolManager");
-
+  function withdrawCompletedCallback(
+    uint256 amount,
+    bool success
+  ) external authCaller(baseVolManager()) nonReentrant {
     if (success) {
       // Update strategy state
       GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();

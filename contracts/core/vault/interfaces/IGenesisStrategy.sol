@@ -31,7 +31,7 @@ interface IGenesisStrategy {
 
   function processAssetsToWithdraw() external;
 
-  function onDepositCompleted(uint256 amount, bool success) external;
+  function depositCompletedCallback(uint256 amount, bool success) external;
 
-  function onWithdrawCompleted(uint256 amount, bool success) external;
+  function withdrawCompletedCallback(uint256 amount, bool success) external;
 }

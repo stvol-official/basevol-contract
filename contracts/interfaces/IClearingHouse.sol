@@ -76,4 +76,7 @@ interface IClearingHouse {
     address user,
     uint256 idx
   ) external view returns (uint256);
+
+  function baseVolManagerDepositCallback(uint256 amount) external;
+  function baseVolManagerWithdrawCallback(uint256 amount) external;
 }

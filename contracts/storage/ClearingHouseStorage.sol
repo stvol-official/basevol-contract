@@ -35,6 +35,8 @@ library ClearingHouseStorage {
     mapping(address => mapping(uint256 => mapping(address => mapping(uint256 => uint256)))) productEscrowCoupons; // product => epoch => user => idx => amount
     mapping(address => Product) products; // product => Product
     address[] productAddresses; // product addresses
+    mapping(address => bool) baseVolManagers; // BaseVol managers
+    address[] baseVolManagerList; // List of baseVol managers
     /* IMPROTANT: you can add new variables here */
   }
 

@@ -10,13 +10,6 @@ interface IGenesisStrategyErrors {
   error ZeroAmountUtilization();
   error InvalidStrategyStatus(uint8 currentStatus, uint8 targetStatus);
 
-  // Leverage configuration errors
-  error InvalidLeverageConfiguration();
-  error TargetLeverageCannotBeZero();
-  error MinLeverageMustBeLessThanTarget();
-  error MaxLeverageMustBeGreaterThanTarget();
-  error SafeMarginLeverageMustBeGreaterThanMax();
-
   // Strategy state errors
   error StrategyNotIdle();
   error StrategyAlreadyPaused();

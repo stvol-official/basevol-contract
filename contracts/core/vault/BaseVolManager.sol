@@ -119,7 +119,7 @@ contract BaseVolManager is
     // Approve ClearingHouse to spend assets
     $.asset.approve(address($.clearingHouse), amount);
 
-    try $.clearingHouse.deposit(address(this), amount) {
+    try $.clearingHouse.baseVolManagerDepositCallback(amount) {
       // Success - update strategy info
       StrategyInfo storage strategyInfo = $.strategies[strategy];
       if (!strategyInfo.isActive) {
@@ -143,10 +143,10 @@ contract BaseVolManager is
       emit DepositedToClearingHouse(strategy, amount, $.clearingHouse.userBalances(address(this)));
 
       // Call strategy callback on success
-      IGenesisStrategy(strategy).onDepositCompleted(amount, true);
+      IGenesisStrategy(strategy).depositCompletedCallback(amount, true);
     } catch {
       // Failure - call strategy callback on failure
-      IGenesisStrategy(strategy).onDepositCompleted(amount, false);
+      IGenesisStrategy(strategy).depositCompletedCallback(amount, false);
       revert("Deposit to ClearingHouse failed");
     }
   }
@@ -167,7 +167,7 @@ contract BaseVolManager is
     require(strategyInfo.isActive, "Strategy not active");
     require(strategyInfo.currentBalance >= amount, "Insufficient balance");
 
-    try $.clearingHouse.withdraw(address(this), amount) {
+    try $.clearingHouse.baseVolManagerWithdrawCallback(amount) {
       // Success - update strategy info
       strategyInfo.currentBalance -= amount;
       strategyInfo.lastActivity = block.timestamp;
@@ -183,10 +183,10 @@ contract BaseVolManager is
       );
 
       // Call strategy callback on success
-      IGenesisStrategy(strategy).onWithdrawCompleted(amount, true);
+      IGenesisStrategy(strategy).withdrawCompletedCallback(amount, true);
     } catch {
       // Failure - call strategy callback on failure
-      IGenesisStrategy(strategy).onWithdrawCompleted(amount, false);
+      IGenesisStrategy(strategy).withdrawCompletedCallback(amount, false);
       revert("Withdraw from ClearingHouse failed");
     }
   }

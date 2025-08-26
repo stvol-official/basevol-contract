@@ -10,4 +10,5 @@ interface ICommonErrors {
   error InvalidTime();
   error OnlyAdmin();
   error OnlyOperator();
+  error OnlyBaseVolManager();
 }
