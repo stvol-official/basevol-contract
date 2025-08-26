@@ -12,8 +12,13 @@ function printHash(input) {
 }
 
 // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.onehour")) - 1)) & ~bytes32(uint256(0xff));
-printHash("com.basevol.storage.oneday");
-printHash("com.basevol.storage.onehour");
-printHash("com.basevol.storage.onemin");
-printHash("com.basevol.storage.vault");
-printHash("com.basevol.storage.clearinghouse");
+// printHash("com.basevol.storage.oneday");
+// printHash("com.basevol.storage.onehour");
+// printHash("com.basevol.storage.onemin");
+// printHash("com.basevol.storage.vault");
+// printHash("com.basevol.storage.clearinghouse");
+
+// printHash("com.basevol.storage.genesisvault");
+// printHash("com.basevol.storage.genesisvaultmanagedvault");
+// printHash("com.basevol.storage.genesisstrategy");
+printHash("com.basevol.storage.basevolmanager");
