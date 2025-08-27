@@ -15,5 +15,17 @@ interface IBaseVolManager {
 
   /// @notice Gets the ClearingHouse balance
   /// @return The balance of the ClearingHouse
-  function getClearingHouseBalance() external view returns (uint256);
+  function clearingHouseBalance() external view returns (uint256);
+
+  /// @notice Gets the total deposited amount
+  /// @return The total deposited amount
+  function totalDeposited() external view returns (uint256);
+
+  /// @notice Gets the total withdrawn amount
+  /// @return The total withdrawn amount
+  function totalWithdrawn() external view returns (uint256);
+
+  /// @notice Gets the total utilized amount
+  /// @return The total utilized amount
+  function totalUtilized() external view returns (uint256);
 }

@@ -26,18 +26,6 @@ contract GenesisVault is Initializable, PausableUpgradeable, GenesisManagedVault
     _disableInitializers();
   }
 
-  /*//////////////////////////////////////////////////////////////
-                            EVENTS
-    //////////////////////////////////////////////////////////////*/
-
-  /// @dev Emitted when a new withdraw/redeem request is created.
-  ///
-  /// @param caller The address of withdraw requestor.
-  /// @param receiver The address who receives the withdraw assets.
-  /// @param owner The address of owner who was requested to withdraw.
-  /// @param withdrawKey The bytes32 value that identifies the withdraw request.
-  /// @param assets The asset amount that is requested to withdraw.
-  /// @param shares The share amount that is burnt.
   event WithdrawRequested(
     address indexed caller,
     address indexed receiver,
@@ -47,79 +35,23 @@ contract GenesisVault is Initializable, PausableUpgradeable, GenesisManagedVault
     uint256 shares
   );
 
-  /// @dev Emitted when a withdraw request gets claimed.
-  ///
-  /// @param claimer The address who claimed the withdraw request.
-  /// @param withdrawKey The bytes32 withdraw key identifying a withdraw request.
-  /// @param assets The asset amount that is claimed.
   event Claimed(address indexed claimer, bytes32 withdrawKey, uint256 assets);
-
-  /// @dev Emitted when this vault get shutdown.
-  ///
-  /// @param account The address who shutdown this vault.
   event Shutdown(address account);
-
-  /// @dev Emitted when a new admin is set.
-  ///
-  /// @param account The address who changed the admin.
-  /// @param newAdmin The address of new admin.
   event AdminUpdated(address indexed account, address indexed newAdmin);
-
-  /// @dev Emitted when a new strategy is set.
-  ///
-  /// @param account The address who changed strategy to a new one.
-  /// @param newStrategy The address of a new strategy.
   event StrategyUpdated(address account, address newStrategy);
-
-  /// @dev Emitted when the entry cost configuration is changed.
-  ///
-  /// @param account The address who changed the entry cost configuration.
-  /// @param newEntryCost The value of the new entry cost configuration.
   event EntryCostUpdated(address account, uint256 newEntryCost);
-
-  /// @dev Emitted when the exit cost configuration is changed.
-  ///
-  /// @param account The address who changed the exit cost configuration.
-  /// @param newExitCost The value of the new exit cost configuration.
   event ExitCostUpdated(address account, uint256 newExitCost);
-
-  /// @dev Emitted when the priority provider address is changed.
-  ///
-  /// @param account The address who changed the priority provider.
-  /// @param newPriorityProvider The address of new priority provider.
   event PriorityProviderUpdated(address account, address newPriorityProvider);
-
-  /// @dev Emitted when the vault state is changed.
-  ///
-  /// @param totalAssets The total assets of the vault.
-  /// @param totalSupply The total supply of the vault.
   event VaultState(uint256 indexed totalAssets, uint256 indexed totalSupply);
-
-  /// @dev Emitted when a prioritized account is added.
-  ///
-  /// @param account The address of the prioritized account.
   event PrioritizedAccountAdded(address indexed account);
-
-  /// @dev Emitted when a prioritized account is removed.
-  ///
-  /// @param account The address of the prioritized account.
   event PrioritizedAccountRemoved(address indexed account);
 
-  /*//////////////////////////////////////////////////////////////
-                               MODIFIERS
-    //////////////////////////////////////////////////////////////*/
-
-  /// @dev Reverts if the caller is not a admin.
   modifier onlyAdmin() {
     if (_msgSender() != admin()) {
       revert OnlyAdmin();
     }
     _;
   }
-
-  /*//////////////////////////////////////////////////////////////
-                            INITIALIZATION
-    //////////////////////////////////////////////////////////////*/
 
   function initialize(
     address owner_,

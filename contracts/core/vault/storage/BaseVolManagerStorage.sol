@@ -3,19 +3,7 @@ pragma solidity ^0.8.4;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IClearingHouse } from "../../../interfaces/IClearingHouse.sol";
-import { IGenesisVault } from "../interfaces/IGenesisVault.sol";
 
-/// @dev Strategy information structure
-struct StrategyInfo {
-  address strategy;
-  uint256 totalDeposited;
-  uint256 totalWithdrawn;
-  uint256 currentBalance;
-  bool isActive;
-  uint256 lastActivity;
-}
-
-/// @dev Asset allocation information
 struct AssetAllocation {
   uint256 totalAllocated;
   uint256 totalUtilized;
@@ -31,7 +19,7 @@ library BaseVolManagerStorage {
     // Core contracts
     IERC20 asset;
     IClearingHouse clearingHouse;
-    IGenesisVault vault;
+    address strategy;
     // Configuration
     uint256 maxStrategyDeposit;
     uint256 minStrategyDeposit;
@@ -40,8 +28,6 @@ library BaseVolManagerStorage {
     uint256 totalDeposited;
     uint256 totalWithdrawn;
     uint256 totalUtilized;
-    // Strategy management
-    mapping(address => StrategyInfo) strategies;
     address[] activeStrategies;
     uint256 activeStrategyCount;
     // Asset allocation

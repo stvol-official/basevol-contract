@@ -29,10 +29,6 @@ contract GenesisStrategy is
 
   uint256 internal constant FLOAT_PRECISION = 1e18;
 
-  /*//////////////////////////////////////////////////////////////
-                                EVENTS
-    //////////////////////////////////////////////////////////////*/
-
   event Utilize(address indexed caller, uint256 assetDelta, uint256 productDelta);
   event Deutilize(address indexed caller, uint256 productDelta, uint256 assetDelta);
   event BaseVolManagerUpdated(address indexed account, address indexed newBaseVolManager);
@@ -41,10 +37,6 @@ contract GenesisStrategy is
 
   event MaxUtilizePctUpdated(address indexed account, uint256 newPct);
   event Stopped(address indexed account);
-
-  /*//////////////////////////////////////////////////////////////
-                            MODIFIERS
-    //////////////////////////////////////////////////////////////*/
 
   /// @dev Authorize caller if it is authorized one.
   modifier authCaller(address authorized) {
@@ -67,10 +59,6 @@ contract GenesisStrategy is
     _validateStrategyStatus(StrategyStatus.IDLE);
     _;
   }
-
-  /*//////////////////////////////////////////////////////////////
-                        INITIALIZATION
-    //////////////////////////////////////////////////////////////*/
 
   constructor() {
     _disableInitializers();
@@ -103,10 +91,6 @@ contract GenesisStrategy is
 
     _setMaxUtilizePct(1 ether); // no cap by default(100%)
   }
-
-  /*//////////////////////////////////////////////////////////////
-                            UTILIZE/DEUTILIZE   
-    //////////////////////////////////////////////////////////////*/
 
   /// @notice Utilizes assets from Vault to ClearingHouse for BaseVol orders.
   /// @dev Uses assets in vault. Callable only by the operator.
@@ -157,7 +141,7 @@ contract GenesisStrategy is
     require(amount > 0, "Amount must be positive");
 
     // Check the actual ClearingHouse balance
-    uint256 actualClearingHouseBalance = $.baseVolManager.getClearingHouseBalance();
+    uint256 actualClearingHouseBalance = $.baseVolManager.clearingHouseBalance();
 
     // Update utilizedAssets considering profit or loss
     if (actualClearingHouseBalance != $.clearingHouseBalance) {
@@ -218,7 +202,7 @@ contract GenesisStrategy is
       GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
       // Check the actual ClearingHouse balance for profit/loss calculation
-      uint256 actualClearingHouseBalance = $.baseVolManager.getClearingHouseBalance();
+      uint256 actualClearingHouseBalance = $.baseVolManager.clearingHouseBalance();
 
       // Update utilizedAssets considering profit or loss
       if (actualClearingHouseBalance != $.clearingHouseBalance) {
@@ -267,10 +251,6 @@ contract GenesisStrategy is
       IERC20(_asset).safeTransfer(vault(), _assetsToWithdraw);
     }
   }
-
-  /*//////////////////////////////////////////////////////////////
-                            ADMIN FUNCTIONS
-    //////////////////////////////////////////////////////////////*/
 
   /// @notice Sets the BaseVolManager.
   function setBaseVolManager(address newBaseVolManager) external onlyOwner {
@@ -357,36 +337,26 @@ contract GenesisStrategy is
     _setStrategyStatus(StrategyStatus.IDLE);
   }
 
-  /*//////////////////////////////////////////////////////////////
-                        STORAGE GETTERS
-    //////////////////////////////////////////////////////////////*/
-
-  /// @notice The address of connected vault.
   function vault() public view returns (address) {
     return address(GenesisStrategyStorage.layout().vault);
   }
 
-  /// @notice The address of the BaseVolManager.
   function baseVolManager() public view returns (address) {
     return address(GenesisStrategyStorage.layout().baseVolManager);
   }
 
-  /// @notice The address of the ClearingHouse.
   function clearingHouse() public view returns (address) {
     return address(GenesisStrategyStorage.layout().clearingHouse);
   }
 
-  /// @notice The address of operator which is responsible for calling utilize/deutilize.
   function operator() public view returns (address) {
     return GenesisStrategyStorage.layout().operator;
   }
 
-  /// @notice The address of underlying asset.
   function asset() public view returns (address) {
     return address(GenesisStrategyStorage.layout().asset);
   }
 
-  /// @notice The strategy status.
   function strategyStatus() public view returns (StrategyStatus) {
     return GenesisStrategyStorage.layout().strategyStatus;
   }
@@ -395,17 +365,14 @@ contract GenesisStrategy is
     return GenesisStrategyStorage.layout().maxUtilizePct;
   }
 
-  /// @notice The amount of assets currently utilized.
   function utilizedAssets() public view returns (uint256) {
     return GenesisStrategyStorage.layout().utilizedAssets;
   }
 
-  /// @notice The current ClearingHouse balance for this strategy.
   function clearingHouseBalance() public view returns (uint256) {
     return GenesisStrategyStorage.layout().clearingHouseBalance;
   }
 
-  /// @notice The amount of assets that need to be withdrawn to process withdraw requests.
   function assetsToWithdraw() public view returns (uint256) {
     return IERC20(asset()).balanceOf(address(this));
   }
