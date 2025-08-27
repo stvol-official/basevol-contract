@@ -34,9 +34,13 @@ contract GenesisStrategy is
   event BaseVolManagerUpdated(address indexed account, address indexed newBaseVolManager);
   event ClearingHouseUpdated(address indexed account, address indexed newClearingHouse);
   event OperatorUpdated(address indexed account, address indexed newOperator);
+  event KeeperAction(string action, uint256 amount);
 
   event MaxUtilizePctUpdated(address indexed account, uint256 newPct);
   event Stopped(address indexed account);
+  event LossDetected(uint256 lossAmount, uint256 lossPercentage, string severity);
+  event EmergencyWithdraw(uint256 amount, uint256 remainingBalance);
+  event DebugLog(string message);
 
   /// @dev Authorize caller if it is authorized one.
   modifier authCaller(address authorized) {
@@ -92,10 +96,14 @@ contract GenesisStrategy is
     _setMaxUtilizePct(1 ether); // no cap by default(100%)
   }
 
+  function utilize(uint256 amount) public authCaller(operator()) whenIdle nonReentrant {
+    _utilize(amount);
+  }
+
   /// @notice Utilizes assets from Vault to ClearingHouse for BaseVol orders.
   /// @dev Uses assets in vault. Callable only by the operator.
   /// @param amount The underlying asset amount to be utilized.
-  function utilize(uint256 amount) external virtual authCaller(operator()) whenIdle nonReentrant {
+  function _utilize(uint256 amount) internal whenIdle nonReentrant {
     _setStrategyStatus(StrategyStatus.UTILIZING);
 
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
@@ -124,50 +132,6 @@ contract GenesisStrategy is
     $.baseVolManager.depositToClearingHouse(amount, address(this));
   }
 
-  /// @notice Deutilizes assets from ClearingHouse back to Vault.
-  /// @dev Callable only by the operator.
-  /// @param amount The amount of assets to be deutilized.
-  function deutilize(uint256 amount) external authCaller(operator()) whenIdle nonReentrant {
-    _deutilize(amount);
-  }
-
-  /// @notice Internal deutilize function for internal calls
-  /// @param amount The amount of assets to be deutilized.
-  function _deutilize(uint256 amount) internal {
-    _setStrategyStatus(StrategyStatus.DEUTILIZING);
-
-    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-
-    require(amount > 0, "Amount must be positive");
-
-    // Check the actual ClearingHouse balance
-    uint256 actualClearingHouseBalance = $.baseVolManager.clearingHouseBalance();
-
-    // Update utilizedAssets considering profit or loss
-    if (actualClearingHouseBalance != $.clearingHouseBalance) {
-      if (actualClearingHouseBalance > $.clearingHouseBalance) {
-        // Profit
-        uint256 profit = actualClearingHouseBalance - $.clearingHouseBalance;
-        $.utilizedAssets += profit;
-      } else {
-        // Loss
-        uint256 loss = $.clearingHouseBalance - actualClearingHouseBalance;
-        if (loss >= $.utilizedAssets) {
-          $.utilizedAssets = 0;
-        } else {
-          $.utilizedAssets -= loss;
-        }
-      }
-
-      $.clearingHouseBalance = actualClearingHouseBalance;
-    }
-
-    require(amount <= $.utilizedAssets, "Amount exceeds utilized assets");
-
-    // Withdraw from ClearingHouse
-    $.baseVolManager.withdrawFromClearingHouse(amount, address(this));
-  }
-
   /// @notice Callback function called by BaseVolManager after deposit completion
   /// @dev Only callable by BaseVolManager
   /// @param amount The amount that was deposited
@@ -180,13 +144,69 @@ contract GenesisStrategy is
       // Update strategy state
       GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
       $.utilizedAssets += amount;
-      $.clearingHouseBalance += amount;
+      $.strategyBalance += amount;
 
       emit Utilize(_msgSender(), amount, 0);
     }
 
-    // Reset to IDLE after completion
-    _setStrategyStatus(StrategyStatus.IDLE);
+    if (success) {
+      _setStrategyStatus(StrategyStatus.IDLE);
+    } else {
+      emit DebugLog("Utilize operation failed");
+    }
+  }
+
+  /// @notice Deutilizes assets from ClearingHouse back to Vault.
+  /// @dev Callable only by the operator.
+  function deutilize() public authCaller(operator()) whenIdle nonReentrant {
+    _deutilize();
+  }
+
+  /// @notice Internal deutilize function for internal calls
+  function _deutilize() internal {
+    _setStrategyStatus(StrategyStatus.DEUTILIZING);
+
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    uint256 currentBalance = $.baseVolManager.clearingHouseBalance();
+    uint256 withdrawAmount = _calculateWithdrawAmount(currentBalance);
+
+    // check if loss is greater than 30%
+    if (currentBalance < $.strategyBalance) {
+      uint256 lossPercentage = ((($.strategyBalance - currentBalance) * FLOAT_PRECISION) /
+        $.strategyBalance);
+      if (lossPercentage > 0.3 ether) {
+        _setStrategyStatus(StrategyStatus.EMERGENCY);
+      }
+    }
+
+    if (withdrawAmount == 0) {
+      if (strategyStatus() != StrategyStatus.EMERGENCY) {
+        _setStrategyStatus(StrategyStatus.IDLE);
+      }
+      return;
+    }
+    $.baseVolManager.withdrawFromClearingHouse(withdrawAmount, address(this));
+  }
+
+  function _calculateWithdrawAmount(uint256 currentBalance) internal view returns (uint256) {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+
+    if (currentBalance < $.strategyBalance) {
+      uint256 loss = $.strategyBalance - currentBalance;
+      uint256 lossPercentage = (loss * FLOAT_PRECISION) / $.strategyBalance;
+
+      if (lossPercentage <= 0.3 ether) {
+        return 0;
+      } else {
+        // if loss is greater than 30%, withdraw all assets
+        return currentBalance;
+      }
+    }
+
+    if (currentBalance > $.strategyBalance) {
+      return currentBalance - $.strategyBalance;
+    }
+    return 0;
   }
 
   /// @notice Callback function called by BaseVolManager after withdraw completion
@@ -205,21 +225,25 @@ contract GenesisStrategy is
       uint256 actualClearingHouseBalance = $.baseVolManager.clearingHouseBalance();
 
       // Update utilizedAssets considering profit or loss
-      if (actualClearingHouseBalance != $.clearingHouseBalance) {
-        if (actualClearingHouseBalance > $.clearingHouseBalance) {
+      if (actualClearingHouseBalance != $.strategyBalance) {
+        if (actualClearingHouseBalance > $.strategyBalance) {
           // Profit
-          uint256 profit = actualClearingHouseBalance - $.clearingHouseBalance;
+          uint256 profit = actualClearingHouseBalance - $.strategyBalance;
           $.utilizedAssets += profit;
         } else {
           // Loss
-          uint256 loss = $.clearingHouseBalance - actualClearingHouseBalance;
+          uint256 loss = $.strategyBalance - actualClearingHouseBalance;
+          uint256 lossPercentage = (loss * FLOAT_PRECISION) / $.strategyBalance;
+
+          _updateLossStatistics(loss, lossPercentage);
+
           if (loss >= $.utilizedAssets) {
             $.utilizedAssets = 0;
           } else {
             $.utilizedAssets -= loss;
           }
         }
-        $.clearingHouseBalance = actualClearingHouseBalance;
+        $.strategyBalance = actualClearingHouseBalance;
       }
 
       // Transfer assets back to Vault
@@ -228,18 +252,66 @@ contract GenesisStrategy is
 
       // Update state
       $.utilizedAssets -= amount;
-      $.clearingHouseBalance -= amount;
+      $.strategyBalance -= amount;
 
       emit Deutilize(_msgSender(), 0, amount);
     }
 
-    // Reset to IDLE after completion
-    _setStrategyStatus(StrategyStatus.IDLE);
+    if (success && strategyStatus() == StrategyStatus.EMERGENCY) {
+      _setStrategyStatus(StrategyStatus.EMERGENCY);
+    } else {
+      _setStrategyStatus(StrategyStatus.IDLE);
+    }
   }
 
   /*//////////////////////////////////////////////////////////////
                             KEEPER LOGIC   
     //////////////////////////////////////////////////////////////*/
+
+  /// @notice Keeper-only rebalancing function - automatically performs appropriate actions based on the situation
+  /// @dev Only callable by Operator and can only be executed in IDLE state
+  /// @dev Priority: 1) Process withdrawal requests, 2) Deutilize according to strategy logic, 3) Utilize new funds
+  function keeperRebalance() external authCaller(operator()) whenIdle nonReentrant {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    IGenesisVault _vault = $.vault;
+
+    // Priority 1: Handle withdraw requests first
+    uint256 pendingWithdraw = _vault.totalPendingWithdraw();
+    uint256 availableInStrategy = assetsToWithdraw();
+
+    if (pendingWithdraw > availableInStrategy) {
+      // Need to deutilize to fulfill withdraw requests
+      _deutilize();
+      emit KeeperAction("DEUTILIZE_FOR_WITHDRAW", pendingWithdraw);
+      return;
+    }
+
+    // Priority 2: Check if we need to deutilize due to strategy logic
+    uint256 currentBalance = $.baseVolManager.clearingHouseBalance();
+    if ($.strategyBalance > 0 && currentBalance > 0) {
+      uint256 withdrawAmount = _calculateWithdrawAmount(currentBalance);
+      if (withdrawAmount > 0) {
+        _deutilize();
+        emit KeeperAction("DEUTILIZE_STRATEGY_LOGIC", withdrawAmount);
+        return;
+      }
+    }
+
+    // Priority 3: Utilize new funds if available
+    uint256 idleAssets = _vault.idleAssets();
+    if (idleAssets > 0) {
+      uint256 maxUtilization = idleAssets.mulDiv(maxUtilizePct(), FLOAT_PRECISION);
+
+      if (maxUtilization > 0 && strategyStatus() != StrategyStatus.EMERGENCY) {
+        _utilize(maxUtilization);
+        emit KeeperAction("UTILIZE_NEW_FUNDS", maxUtilization);
+        return;
+      }
+    }
+
+    // No action needed
+    emit KeeperAction("NO_ACTION", 0);
+  }
 
   /// @notice Processes idle assets for the withdraw requests.
   /// @dev Callable by anyone and only when strategy is in the IDLE status.
@@ -292,16 +364,114 @@ contract GenesisStrategy is
 
   /// @notice Stops strategy while processing all assets back to vault.
   function stop() external onlyOwnerOrVault whenNotPaused {
-    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
     _setStrategyStatus(StrategyStatus.DEUTILIZING);
-
-    // Deutilize all assets
-    if ($.utilizedAssets > 0) {
-      _deutilize($.utilizedAssets);
-    }
+    _deutilize();
 
     _pause();
     emit Stopped(_msgSender());
+  }
+
+  /// @notice Get current PnL information
+  /// @return isProfit Whether the strategy is in profit
+  /// @return absolutePnL Absolute PnL amount (positive for profit, negative for loss)
+  /// @return percentagePnL PnL as percentage of strategy balance
+  /// @return currentBalance Current ClearingHouse balance
+  /// @return initialStrategyBalance Initial strategy balance
+  function getPnLInfo()
+    external
+    view
+    returns (
+      bool isProfit,
+      int256 absolutePnL,
+      uint256 percentagePnL,
+      uint256 currentBalance,
+      uint256 initialStrategyBalance
+    )
+  {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    currentBalance = $.baseVolManager.clearingHouseBalance();
+    initialStrategyBalance = $.strategyBalance;
+
+    if (currentBalance > initialStrategyBalance) {
+      isProfit = true;
+      absolutePnL = int256(currentBalance - initialStrategyBalance);
+      percentagePnL =
+        ((currentBalance - initialStrategyBalance) * FLOAT_PRECISION) /
+        initialStrategyBalance;
+    } else if (currentBalance < initialStrategyBalance) {
+      isProfit = false;
+      absolutePnL = -int256(initialStrategyBalance - currentBalance);
+      percentagePnL =
+        ((initialStrategyBalance - currentBalance) * FLOAT_PRECISION) /
+        initialStrategyBalance;
+    } else {
+      isProfit = false;
+      absolutePnL = 0;
+      percentagePnL = 0;
+    }
+  }
+
+  /// @notice Get current profit amount (0 if in loss)
+  /// @return profitAmount Current profit amount
+  function getCurrentProfit() external view returns (uint256 profitAmount) {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    uint256 currentBalance = $.baseVolManager.clearingHouseBalance();
+
+    if (currentBalance > $.strategyBalance) {
+      profitAmount = currentBalance - $.strategyBalance;
+    } else {
+      profitAmount = 0;
+    }
+  }
+
+  /// @notice Get current loss amount (0 if in profit)
+  /// @return lossAmount Current loss amount
+  function getCurrentLoss() external view returns (uint256 lossAmount) {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    uint256 currentBalance = $.baseVolManager.clearingHouseBalance();
+
+    if (currentBalance < $.strategyBalance) {
+      lossAmount = $.strategyBalance - currentBalance;
+    } else {
+      lossAmount = 0;
+    }
+  }
+
+  /// @notice Get strategy performance metrics
+  /// @return totalUtilized Total assets utilized
+  /// @return currentUtilized Current utilized assets
+  /// @return totalProfit Total profit realized
+  /// @return totalLoss Total loss realized
+  /// @return netPerformance Net performance (profit - loss)
+  function getStrategyMetrics()
+    external
+    view
+    returns (
+      uint256 totalUtilized,
+      uint256 currentUtilized,
+      uint256 totalProfit,
+      uint256 totalLoss,
+      int256 netPerformance
+    )
+  {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+
+    totalUtilized = $.utilizedAssets;
+    currentUtilized = $.baseVolManager.clearingHouseBalance();
+
+    // Calculate realized profit/loss from strategy balance changes
+    if (currentUtilized > $.strategyBalance) {
+      totalProfit = currentUtilized - $.strategyBalance;
+      totalLoss = 0;
+    } else if (currentUtilized < $.strategyBalance) {
+      totalProfit = 0;
+      totalLoss = $.strategyBalance - currentUtilized;
+    } else {
+      totalProfit = 0;
+      totalLoss = 0;
+    }
+
+    netPerformance = int256(totalProfit) - int256(totalLoss);
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -333,8 +503,14 @@ contract GenesisStrategy is
     GenesisStrategyStorage.layout().strategyStatus = newStatus;
   }
 
-  function _resetToIdle() internal {
-    _setStrategyStatus(StrategyStatus.IDLE);
+  function _updateLossStatistics(uint256 lossAmount, uint256 lossPercentage) internal {
+    if (lossPercentage > 0.3 ether) {
+      emit LossDetected(lossAmount, lossPercentage, "CRITICAL");
+    } else if (lossPercentage > 0.1 ether) {
+      emit LossDetected(lossAmount, lossPercentage, "HIGH");
+    } else {
+      emit LossDetected(lossAmount, lossPercentage, "NORMAL");
+    }
   }
 
   function vault() public view returns (address) {
@@ -369,8 +545,8 @@ contract GenesisStrategy is
     return GenesisStrategyStorage.layout().utilizedAssets;
   }
 
-  function clearingHouseBalance() public view returns (uint256) {
-    return GenesisStrategyStorage.layout().clearingHouseBalance;
+  function strategyBalance() public view returns (uint256) {
+    return GenesisStrategyStorage.layout().strategyBalance;
   }
 
   function assetsToWithdraw() public view returns (uint256) {

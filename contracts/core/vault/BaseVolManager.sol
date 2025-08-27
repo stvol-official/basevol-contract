@@ -10,7 +10,7 @@ import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/P
 import { IClearingHouse } from "../../interfaces/IClearingHouse.sol";
 import { IGenesisVault } from "./interfaces/IGenesisVault.sol";
 import { IGenesisStrategy } from "./interfaces/IGenesisStrategy.sol";
-import { BaseVolManagerStorage, AssetAllocation } from "./storage/BaseVolManagerStorage.sol";
+import { BaseVolManagerStorage } from "./storage/BaseVolManagerStorage.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract BaseVolManager is
@@ -102,9 +102,6 @@ contract BaseVolManager is
 
     BaseVolManagerStorage.Layout storage $ = BaseVolManagerStorage.layout();
 
-    // Only the registered strategy can call this function
-    require(msg.sender == address($.strategy), "Only strategy can call");
-
     // Check if total exposure would exceed limit
     if ($.totalUtilized + amount > $.maxTotalExposure) revert ExceedsMaxExposure();
 
@@ -114,12 +111,10 @@ contract BaseVolManager is
     // Approve ClearingHouse to spend assets
     $.asset.approve(address($.clearingHouse), amount);
 
-    try $.clearingHouse.baseVolManagerDepositCallback(amount) {
+    try $.clearingHouse.baseVolManagerDeposit(amount) {
       // Update global state
       $.totalDeposited += amount;
       $.totalUtilized += amount;
-      $.assetAllocation.totalAllocated += amount;
-      $.assetAllocation.totalUtilized += amount;
 
       emit DepositedToClearingHouse(
         $.strategy,
@@ -145,13 +140,11 @@ contract BaseVolManager is
 
     BaseVolManagerStorage.Layout storage $ = BaseVolManagerStorage.layout();
 
-    // Only the registered strategy can call this function
-    require(msg.sender == address($.strategy), "Only strategy can call");
+    uint256 availableBalance = $.clearingHouse.userBalances(address(this));
+    if (availableBalance < amount) revert InsufficientBalance();
 
-    try $.clearingHouse.baseVolManagerWithdrawCallback(amount) {
-      // Update global state
+    try $.clearingHouse.baseVolManagerWithdraw(amount) {
       $.totalUtilized -= amount;
-      $.assetAllocation.totalUtilized -= amount;
 
       emit WithdrawnFromClearingHouse(
         address($.strategy),
@@ -174,9 +167,8 @@ contract BaseVolManager is
     BaseVolManagerStorage.Layout storage $ = BaseVolManagerStorage.layout();
 
     // Withdraw from ClearingHouse
-    try $.clearingHouse.baseVolManagerWithdrawCallback(amount) {
+    try $.clearingHouse.baseVolManagerWithdraw(amount) {
       $.totalUtilized -= amount;
-      $.assetAllocation.totalUtilized -= amount;
 
       emit WithdrawnFromClearingHouse(
         strategy(),
@@ -234,10 +226,6 @@ contract BaseVolManager is
   /// @notice Gets the current ClearingHouse balance for this manager
   function clearingHouseBalance() public view returns (uint256) {
     return BaseVolManagerStorage.layout().clearingHouse.userBalances(address(this));
-  }
-
-  function assetAllocation() public view returns (AssetAllocation memory) {
-    return BaseVolManagerStorage.layout().assetAllocation;
   }
 
   function totalDeposited() public view returns (uint256) {

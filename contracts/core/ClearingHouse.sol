@@ -1086,17 +1086,17 @@ contract ClearingHouse is
     return $.productEscrowCoupons[product][epoch][user][idx];
   }
 
-  function baseVolManagerDepositCallback(uint256 amount) external onlyBaseVolManager nonReentrant {
+  function baseVolManagerDeposit(uint256 amount) external onlyBaseVolManager nonReentrant {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     $.token.safeTransferFrom(msg.sender, address(this), amount);
     $.userBalances[msg.sender] += amount;
     emit Deposit(msg.sender, msg.sender, amount, $.userBalances[msg.sender]);
   }
 
-  function baseVolManagerWithdrawCallback(uint256 amount) external onlyBaseVolManager nonReentrant {
+  function baseVolManagerWithdraw(uint256 amount) external onlyBaseVolManager nonReentrant {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
-    $.userBalances[msg.sender] -= amount + $.withdrawalFee;
-    $.treasuryAmount += $.withdrawalFee;
+    // withdrawalFee is not used for now
+    $.userBalances[msg.sender] -= amount;
     $.token.safeTransfer(msg.sender, amount);
     emit Withdraw(msg.sender, amount, $.userBalances[msg.sender]);
   }

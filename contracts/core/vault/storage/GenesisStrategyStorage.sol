@@ -10,7 +10,8 @@ import { IClearingHouse } from "../../../interfaces/IClearingHouse.sol";
 enum StrategyStatus {
   IDLE, // When new operations are available.
   UTILIZING, // When utilizing assets for BaseVol orders.
-  DEUTILIZING // When deutilizing assets from BaseVol orders.
+  DEUTILIZING, // When deutilizing assets from BaseVol orders.
+  EMERGENCY // When emergency withdraw is needed.
 }
 
 library GenesisStrategyStorage {
@@ -19,19 +20,16 @@ library GenesisStrategyStorage {
     0x329793624a430b57825c5c2629f7978ecf9358ac6b0cb51a1483d68edba62100;
 
   struct Layout {
-    // Core addresses
     IERC20 asset;
     IGenesisVault vault;
     IBaseVolManager baseVolManager;
     IClearingHouse clearingHouse;
     address operator;
     address config;
-    // Strategy state
     StrategyStatus strategyStatus;
-    // BaseVol specific
     uint256 maxUtilizePct;
     uint256 utilizedAssets;
-    uint256 clearingHouseBalance;
+    uint256 strategyBalance;
   }
 
   function layout() internal pure returns (Layout storage $) {

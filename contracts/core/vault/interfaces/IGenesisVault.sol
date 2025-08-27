@@ -30,6 +30,9 @@ interface IGenesisVault {
   /// @notice Returns whether this vault has been shut down
   function isShutdown() external view returns (bool);
 
+  /// @notice Returns the total pending withdraw amount
+  function totalPendingWithdraw() external view returns (uint256);
+
   /*//////////////////////////////////////////////////////////////
                             ADMIN FUNCTIONS
   //////////////////////////////////////////////////////////////*/

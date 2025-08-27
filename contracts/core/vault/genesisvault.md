@@ -214,7 +214,7 @@ sequenceDiagram
     Note over Strategy: 자산 회수 필요 시
     Strategy->>Strategy: deutilize()
     Strategy->>Manager: withdrawFromClearingHouse()
-    Manager->>ClearingHouse: baseVolManagerWithdrawCallback()
+    Manager->>ClearingHouse: baseVolManagerWithdraw()
 
     User->>Vault: processPendingWithdrawRequests()
     Vault->>Strategy: processAssetsToWithdraw()
@@ -423,9 +423,9 @@ IGenesisStrategy(strategy).withdrawCompletedCallback(amount, true);
 $.clearingHouse.baseVolManagerDepositCallback(amount);
 ```
 
-#### baseVolManagerWithdrawCallback
+#### baseVolManagerWithdraw
 
-**위치**: `IClearingHouse.baseVolManagerWithdrawCallback()`
+**위치**: `IClearingHouse.baseVolManagerWithdraw()`
 
 **호출 시점**: BaseVolManager에서 ClearingHouse에서 자산 인출 시
 
@@ -443,7 +443,7 @@ $.clearingHouse.baseVolManagerDepositCallback(amount);
 
 ```solidity
 // BaseVolManager.sol에서 호출
-$.clearingHouse.baseVolManagerWithdrawCallback(amount);
+$.clearingHouse.baseVolManagerWithdraw(amount);
 ```
 
 ### D. 콜백 함수 호출 흐름
@@ -457,7 +457,7 @@ sequenceDiagram
     participant ClearingHouse
 
     Strategy->>Manager: depositToClearingHouse()
-    Manager->>ClearingHouse: baseVolManagerDepositCallback()
+    Manager->>ClearingHouse: baseVolManagerDeposit()
     Note over ClearingHouse: 자산 할당 처리
 
     alt 성공
@@ -480,16 +480,16 @@ sequenceDiagram
     participant ClearingHouse
 
     Strategy->>Manager: withdrawFromClearingHouse()
-    Manager->>ClearingHouse: baseVolManagerWithdrawCallback()
+    Manager->>ClearingHouse: baseVolManagerWithdraw()
     Note over ClearingHouse: 자산 해제 처리
 
     alt 성공
         ClearingHouse-->>Manager: 성공 응답
-        Manager->>Strategy: withdrawCompletedCallback(amount, true)
+        Manager->>Strategy: withdrawCompleted(amount, true)
         Note over Strategy: 상태 업데이트 및 인출 자산 처리
     else 실패
         ClearingHouse-->>Manager: 실패 응답
-        Manager->>Strategy: withdrawCompletedCallback(amount, false)
+        Manager->>Strategy: withdrawCompleted(amount, false)
         Note over Strategy: 에러 처리 및 재시도 로직
     end
 ```
