@@ -1,12 +1,13 @@
 import { ethers, network, run, upgrades } from "hardhat";
-import config from "../config";
+import config from "../../config";
 
 /*
- npx hardhat run --network base_sepolia scripts/deploy-genesis-basevol-manager.ts
- npx hardhat run --network base scripts/deploy-genesis-basevol-manager.ts
+ npx hardhat run --network base_sepolia scripts/genesis-vault/deploy-genesis-basevol-manager.ts
+ npx hardhat run --network base scripts/genesis-vault/deploy-genesis-basevol-manager.ts
 */
 const NETWORK = ["base_sepolia", "base"] as const;
 type SupportedNetwork = (typeof NETWORK)[number];
+const GENESIS_STRATEGY_ADDRESS = "0x91d9Cf3Ee90e757dA6B01E896BD60D281bc6E93a";
 
 const main = async () => {
   // Get network data from Hardhat config
@@ -48,19 +49,16 @@ const main = async () => {
     console.log("\n🚀 Deploying BaseVolManager...");
     const BaseVolManager = await ethers.getContractFactory("BaseVolManager");
 
-    // 초기화 파라미터 (vault는 나중에 설정)
     const initParams = [
       config.Address.Usdc[networkName], // _asset (USDC)
       config.Address.ClearingHouse[networkName], // _clearingHouse
-      ethers.ZeroAddress, // _vault (나중에 설정)
-      config.Address.Admin[networkName], // _owner
+      GENESIS_STRATEGY_ADDRESS,
     ];
 
     console.log("Initialization parameters:");
     console.log("- Asset (USDC):", initParams[0]);
     console.log("- ClearingHouse:", initParams[1]);
-    console.log("- Vault:", initParams[2]);
-    console.log("- Owner:", initParams[3]);
+    console.log("- Strategy:", initParams[2]);
 
     // 타입 캐스팅으로 수정
     const baseVolManager = (await upgrades.deployProxy(BaseVolManager, initParams, {
@@ -74,7 +72,7 @@ const main = async () => {
     console.log(`✅ BaseVolManager deployed at ${baseVolManagerAddress}`);
 
     // 컨트랙트 검증
-    console.log("\n�� Verifying contract...");
+    console.log("\n Verifying contract...");
     try {
       await run("verify:verify", {
         address: baseVolManagerAddress,
@@ -87,15 +85,15 @@ const main = async () => {
     }
 
     // 배포된 컨트랙트 정보 출력
-    console.log("\n�� Deployment Summary:");
+    console.log("\n Deployment Summary:");
     console.log("===========================================");
     console.log("Contract: BaseVolManager");
     console.log("Address:", baseVolManagerAddress);
     console.log("Network:", networkName);
-    console.log("Owner:", config.Address.Admin[networkName]);
+    console.log("Owner:", deployer.address);
     console.log("Asset (USDC):", config.Address.Usdc[networkName]);
     console.log("ClearingHouse:", config.Address.ClearingHouse[networkName]);
-    console.log("Vault:", "To be set later");
+    console.log("Strategy:", GENESIS_STRATEGY_ADDRESS);
     console.log("===========================================");
 
     // 설정 확인

@@ -28,6 +28,10 @@ export default {
       base_sepolia: "0x1A8B9822C98dF3F527b3D0a5e71CC45243F2f6F7", // VaultManager Contract
       base: "0x3EECcDA279Ce530E0107004cdE4f018E2513B006",
     },
+    Strategy: {
+      base_sepolia: "0x0000000000000000000000000000000000000000",
+      base: "0x0000000000000000000000000000000000000000",
+    },
   },
   CommissionFee: {
     base_sepolia: 990, // 9.9%

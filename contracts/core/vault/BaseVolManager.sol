@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import { Ownable2StepUpgradeable } from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
-import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { IClearingHouse } from "../../interfaces/IClearingHouse.sol";
 import { IGenesisVault } from "./interfaces/IGenesisVault.sol";
 import { IGenesisStrategy } from "./interfaces/IGenesisStrategy.sol";
@@ -15,8 +16,9 @@ import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract BaseVolManager is
   Initializable,
-  Ownable2StepUpgradeable,
+  UUPSUpgradeable,
   PausableUpgradeable,
+  OwnableUpgradeable,
   ReentrancyGuardUpgradeable
 {
   using SafeERC20 for IERC20;
@@ -61,6 +63,7 @@ contract BaseVolManager is
     _;
   }
 
+  /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
     _disableInitializers();
   }
@@ -68,10 +71,10 @@ contract BaseVolManager is
   function initialize(
     address _asset,
     address _clearingHouse,
-    address _strategy,
-    address _owner
+    address _strategy
   ) external initializer {
-    __Ownable_init(_owner);
+    __UUPSUpgradeable_init();
+    __Ownable_init(msg.sender);
     __Pausable_init();
     __ReentrancyGuard_init();
 
@@ -79,7 +82,6 @@ contract BaseVolManager is
 
     require(_asset != address(0), "Invalid asset address");
     require(_clearingHouse != address(0), "Invalid ClearingHouse address");
-    require(_strategy != address(0), "Invalid Strategy address");
 
     $.asset = IERC20(_asset);
     $.clearingHouse = IClearingHouse(_clearingHouse);
@@ -160,6 +162,8 @@ contract BaseVolManager is
       revert("Withdraw from ClearingHouse failed");
     }
   }
+
+  function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
   /// @notice Emergency withdrawal for a strategy (owner only)
   /// @param amount The amount to withdraw

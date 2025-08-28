@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
+pragma abicoder v2;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import { ERC4626Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import { PausableUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -15,16 +15,12 @@ import { GenesisVaultStorage } from "./storage/GenesisVaultStorage.sol";
 import { IGenesisVaultErrors } from "./errors/GenesisVaultErrors.sol";
 import { IGenesisStrategy } from "./interfaces/IGenesisStrategy.sol";
 
-contract GenesisVault is Initializable, PausableUpgradeable, GenesisManagedVault {
+contract GenesisVault is Initializable, GenesisManagedVault {
   using Math for uint256;
   using SafeERC20 for IERC20;
   using SafeCast for uint256;
 
-  uint256 constant MAX_COST = 0.01 ether; //1%
-
-  constructor() {
-    _disableInitializers();
-  }
+  uint256 constant MAX_COST = 0.10 ether; // 10%
 
   event WithdrawRequested(
     address indexed caller,
@@ -41,6 +37,7 @@ contract GenesisVault is Initializable, PausableUpgradeable, GenesisManagedVault
   event StrategyUpdated(address account, address newStrategy);
   event EntryCostUpdated(address account, uint256 newEntryCost);
   event ExitCostUpdated(address account, uint256 newExitCost);
+  event MaxCostsUpdated(address account, uint256 newMaxEntryCost, uint256 newMaxExitCost);
   event PriorityProviderUpdated(address account, address newPriorityProvider);
   event VaultState(uint256 indexed totalAssets, uint256 indexed totalSupply);
   event PrioritizedAccountAdded(address indexed account);
@@ -54,32 +51,18 @@ contract GenesisVault is Initializable, PausableUpgradeable, GenesisManagedVault
   }
 
   function initialize(
-    address owner_,
     address asset_,
     uint256 entryCost_,
     uint256 exitCost_,
     string calldata name_,
     string calldata symbol_
   ) external initializer {
-    __ManagedVault_init(owner_, asset_, name_, symbol_);
+    __GenesisManagedVault_init(msg.sender, asset_, name_, symbol_);
+    require(entryCost_ <= MAX_COST, "Entry cost too high");
+    require(exitCost_ <= MAX_COST, "Exit cost too high");
+
     _setEntryCost(entryCost_);
     _setExitCost(exitCost_);
-  }
-
-  function _setEntryCost(uint256 value) internal {
-    require(value < MAX_COST);
-    if (entryCost() != value) {
-      GenesisVaultStorage.layout().entryCost = value;
-      emit EntryCostUpdated(_msgSender(), value);
-    }
-  }
-
-  function _setExitCost(uint256 value) internal {
-    require(value < MAX_COST);
-    if (exitCost() != value) {
-      GenesisVaultStorage.layout().exitCost = value;
-      emit ExitCostUpdated(_msgSender(), value);
-    }
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -344,6 +327,22 @@ contract GenesisVault is Initializable, PausableUpgradeable, GenesisManagedVault
     if (cost > 0) IGenesisStrategy(strategy()).reserveExecutionCost(cost);
 
     return withdrawKey;
+  }
+
+  function _setEntryCost(uint256 value) internal {
+    require(value <= MAX_COST, "Entry cost exceeds maximum");
+    if (entryCost() != value) {
+      GenesisVaultStorage.layout().entryCost = value;
+      emit EntryCostUpdated(_msgSender(), value);
+    }
+  }
+
+  function _setExitCost(uint256 value) internal {
+    require(value <= MAX_COST, "Exit cost exceeds maximum");
+    if (exitCost() != value) {
+      GenesisVaultStorage.layout().exitCost = value;
+      emit ExitCostUpdated(_msgSender(), value);
+    }
   }
 
   /// @dev requestWithdraw/requestRedeem common workflow.

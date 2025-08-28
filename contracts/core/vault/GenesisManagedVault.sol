@@ -3,10 +3,12 @@ pragma solidity ^0.8.4;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import { ERC4626Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
-import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import { Ownable2StepUpgradeable } from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { GenesisVaultManagedVaultStorage } from "./storage/GenesisVaultManagedVaultStorage.sol";
 import { IGenesisVaultErrors } from "./errors/GenesisVaultErrors.sol";
@@ -19,8 +21,10 @@ import { IGenesisVaultErrors } from "./errors/GenesisVaultErrors.sol";
 /// to collect AUM fees including the management fee and performance fee.
 abstract contract GenesisManagedVault is
   Initializable,
+  UUPSUpgradeable,
+  OwnableUpgradeable,
+  PausableUpgradeable,
   ERC4626Upgradeable,
-  Ownable2StepUpgradeable,
   IGenesisVaultErrors
 {
   using Math for uint256;
@@ -59,21 +63,27 @@ abstract contract GenesisManagedVault is
   /// @dev Emitted when a new whitelist provider is set.
   event WhitelistProviderChanged(address account, address newWhitelistProvider);
 
-  /*//////////////////////////////////////////////////////////////
-                        INITIALIZING
-    //////////////////////////////////////////////////////////////*/
+  /// @custom:oz-upgrades-unsafe-allow constructor
+  constructor() {
+    _disableInitializers();
+  }
 
-  function __ManagedVault_init(
+  function __GenesisManagedVault_init(
     address owner_,
     address asset_,
     string calldata name_,
     string calldata symbol_
   ) internal onlyInitializing {
+    __UUPSUpgradeable_init();
     __Ownable_init(owner_);
+    __Pausable_init();
     __ERC20_init_unchained(name_, symbol_);
     __ERC4626_init_unchained(IERC20(asset_));
     _setDepositLimits(type(uint256).max, type(uint256).max);
   }
+
+  /* internal functions */
+  function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
   function _setDepositLimits(uint256 userLimit, uint256 vaultLimit) internal {
     GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
