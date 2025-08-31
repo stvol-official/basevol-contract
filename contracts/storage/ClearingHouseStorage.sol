@@ -8,7 +8,7 @@ import { WithdrawalRequest, Coupon, ForceWithdrawalRequest, CouponUsageDetail, P
 library ClearingHouseStorage {
   // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.clearinghouse")) - 1)) & ~bytes32(uint256(0xff));
   bytes32 internal constant SLOT =
-    0x20427f0c61138b4eb4becfbfceaa6e34fbd8d2897b15f8cd4fe50ddc7b548700;
+    0x774c44a0b38ae921c4dec3ca94745bada9f891442f312f232ca295c24066bb00;
 
   struct Layout {
     IERC20 token; // Prediction token
@@ -28,8 +28,6 @@ library ClearingHouseStorage {
     address[] couponHolders;
     uint256 withdrawalFee; // withdrawal fee
     mapping(uint256 => bool) processedBatchIds; // processed batch ids
-    mapping(uint256 => mapping(address => mapping(uint256 => uint256))) escrowBalances; // [DEPRECATED] epoch => user => idx => amount
-    mapping(uint256 => mapping(address => mapping(uint256 => uint256))) escrowCoupons; // [DEPRECATED] epoch => user => idx => amount
     mapping(address => mapping(uint256 => CouponUsageDetail[])) couponUsageHistory; // user => epoch => CouponUsageDetail[]
     mapping(address => mapping(uint256 => mapping(address => mapping(uint256 => uint256)))) productEscrowBalances; // product => epoch => user => idx => amount
     mapping(address => mapping(uint256 => mapping(address => mapping(uint256 => uint256)))) productEscrowCoupons; // product => epoch => user => idx => amount

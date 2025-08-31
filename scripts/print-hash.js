@@ -11,9 +11,9 @@ function printHash(input) {
   console.log(`${input}: ${maskedHash}`);
 }
 
-// keccak256(abi.encode(uint256(keccak256("com.basevol.storage.onehour")) - 1)) & ~bytes32(uint256(0xff));
-printHash("com.basevol.storage.oneday");
-printHash("com.basevol.storage.onehour");
-printHash("com.basevol.storage.onemin");
-printHash("com.basevol.storage.vault");
-printHash("com.basevol.storage.clearinghouse");
+// keccak256(abi.encode(uint256(keccak256("com.basevol.storage.onehour.secure")) - 1)) & ~bytes32(uint256(0xff));
+printHash("com.basevol.storage.oneday.secure");
+printHash("com.basevol.storage.onehour.secure");
+printHash("com.basevol.storage.onemin.secure");
+printHash("com.basevol.storage.vault.secure");
+printHash("com.basevol.storage.clearinghouse.secure");

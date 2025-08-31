@@ -9,20 +9,20 @@ export default {
       base: "0x8250f4aF4B972684F7b336503E2D6dFeDeB1487a",
     },
     Admin: {
-      base_sepolia: "0xC61042a7e9a6fe7E738550f24030D37Ecb296DC0",
-      base: "0x5e6c12e083B1Ad5fB7c7bf5582467EB74cD58a66",
+      base_sepolia: "0x879720F64fD5784B0109eb7410247d5254C58c1B",
+      base: "0x26B85826014fF3483CBC550B3DDAF5954cc15d70",
     },
     Operator: {
-      base_sepolia: "0x5e6c12e083B1Ad5fB7c7bf5582467EB74cD58a66",
-      base: "0x5e6c12e083B1Ad5fB7c7bf5582467EB74cD58a66",
+      base_sepolia: "0x879720F64fD5784B0109eb7410247d5254C58c1B",
+      base: "0x0977456Ba44C3e7487Ddbff564790F429F600C4C",
     },
     OperatorVault: {
-      base_sepolia: "0xC61042a7e9a6fe7E738550f24030D37Ecb296DC0",
+      base_sepolia: "0x879720F64fD5784B0109eb7410247d5254C58c1B",
       base: "0xfc48F475E7296c9e645311B85F8F2bcb64BD8fbd",
     },
     ClearingHouse: {
       base_sepolia: "0x813fbbBb2BBde225389220A3E4d436EE73F3c172", // ClearingHouse Contract
-      base: "0x24Ea761cc6b9941ADff142ba5C75E025D56E12D2",
+      base: "0xa57c9bD31d58b487A2934A4b74C00BA7Ae89646C",
     },
     VaultManager: {
       base_sepolia: "0x1A8B9822C98dF3F527b3D0a5e71CC45243F2f6F7", // VaultManager Contract

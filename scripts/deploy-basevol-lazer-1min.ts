@@ -64,18 +64,6 @@ const main = async () => {
     );
 
     await baseVolContract.waitForDeployment();
-
-    // initialize 호출 확인
-    console.log("Checking initialization...");
-    const [adminAddress] = await baseVolContract.addresses();
-    if (adminAddress !== config.Address.Admin[networkName]) {
-      console.error("Contract was not properly initialized!");
-      console.error(`Expected admin address: ${config.Address.Admin[networkName]}`);
-      console.error(`Actual admin address: ${adminAddress}`);
-      throw new Error("Initialization failed");
-    }
-    console.log("Contract successfully initialized");
-
     const baseVolContractAddress = await baseVolContract.getAddress();
     console.log(`🍣 ${contractName} PROXY Contract deployed at ${baseVolContractAddress}`);
 

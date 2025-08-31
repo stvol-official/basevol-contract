@@ -18,7 +18,6 @@ interface IClearingHouse {
     address _operatorAddress,
     address _vaultAddress
   ) external;
-  function addTreasuryAmount(uint256 amount) external;
   function addUserBalance(address user, uint256 amount) external;
   function approveWithdrawal(uint256 idx) external;
   function claimTreasury(address operatorVaultAddress) external;
