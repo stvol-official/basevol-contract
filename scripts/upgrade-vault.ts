@@ -27,6 +27,11 @@ const upgrade = async () => {
     },
   });
 
+  const isSafeOwner = await input({
+    message: "Is the owner safe address?",
+    default: "N",
+  });
+
   // Check if the network is supported.
   if (NETWORK.includes(networkName)) {
     console.log(`Deploying to ${networkName} network...`);
@@ -39,14 +44,53 @@ const upgrade = async () => {
     const VaultFactory = await ethers.getContractFactory(contractName);
 
     await upgrades.forceImport(PROXY, VaultFactory, { kind: "uups" });
-    const contract = await upgrades.upgradeProxy(PROXY, VaultFactory, {
-      kind: "uups",
-      redeployImplementation: "always",
-    });
+    let contractAddress;
+    if (isSafeOwner === "N") {
+      const contract = await upgrades.upgradeProxy(PROXY, VaultFactory, {
+        kind: "uups",
+        redeployImplementation: "always",
+      });
+      await contract.waitForDeployment();
+      contractAddress = await contract.getAddress();
+      console.log(`🍣 ${contractName} Contract deployed at ${contractAddress}`);
+    } else {
+      const contract = await upgrades.prepareUpgrade(PROXY, VaultFactory, {
+        kind: "uups",
+        redeployImplementation: "always",
+      });
+      contractAddress = contract;
+      console.log(` New implementation contract deployed at: ${contract}`);
+      console.log("Use this address in your Safe transaction to upgrade the proxy");
 
-    await contract.waitForDeployment();
-    const contractAddress = await contract.getAddress();
-    console.log(`🍣 ${contractName} Contract deployed at ${contractAddress}`);
+      /**
+       * Usage: https://safe.optimism.io/
+       * Enter Address: 0x7D17584f8D6d798EdD4fBEA0EE5a8fAF0f4d6bd2
+       * Enter ABI:
+       [
+          {
+            "inputs": [
+              {
+                "internalType": "address",
+                "name": "newImplementation",
+                "type": "address"
+              },
+              {
+                "internalType": "bytes",
+                "name": "data",
+                "type": "bytes"
+              }
+            ],
+            "name": "upgradeToAndCall",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+          }
+        ]
+       * Contract Method: upgradeToAndCall(address newImplementation, bytes data)
+       * newImplementation: ${contract}
+       * Enter Data: 0x
+       */
+    }
 
     const network = await ethers.getDefaultProvider().getNetwork();
 
