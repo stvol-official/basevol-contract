@@ -472,26 +472,6 @@ contract ClearingHouse is
     }
   }
 
-  function setUserBalances(
-    address[] calldata users,
-    uint256[] calldata amounts
-  ) external nonReentrant onlyOperator {
-    if (users.length != amounts.length) {
-      emit DebugLog("Invalid amount: users and amounts length mismatch");
-      return;
-    }
-
-    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
-
-    for (uint256 i = 0; i < users.length; i++) {
-      if (users[i] == address(0)) {
-        emit DebugLog("Invalid address: zero address detected");
-        return;
-      }
-      $.userBalances[users[i]] = amounts[i];
-    }
-  }
-
   function addOperator(address operator) external onlyAdmin {
     if (operator == address(0)) revert InvalidAddress();
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
