@@ -30,6 +30,7 @@ contract ClearingHouse is
   uint256 private constant MAX_WITHDRAWAL_FEE = 10 * PRICE_UNIT; // $10
   uint256 private constant DEFAULT_FORCE_WITHDRAWAL_DELAY = 24 hours;
   uint256 private constant START_TIMESTAMP = 1750636800; // for epoch
+  uint256 private constant MAX_OPERATOR_CHANGE_AMOUNT = 100 * 1e6; // $100
 
   event Deposit(address indexed to, address from, uint256 amount, uint256 result);
   event Withdraw(address indexed to, uint256 amount, uint256 result);
@@ -64,13 +65,13 @@ contract ClearingHouse is
     uint256 amount,
     uint256 fee
   );
-  event DebugLog(string message);
   event ProductUpdated(
     address indexed product,
     uint256 startTimestamp,
     TimeUnit timeUnit,
     bool isActive
   );
+  event DebugLog(string message);
 
   event BaseVolManagerDeposit(address indexed token, uint256 amount);
   event BaseVolManagerDepositWithData(
@@ -126,6 +127,7 @@ contract ClearingHouse is
   function initialize(
     address _usdcAddress,
     address _adminAddress,
+    address _operatorAddress,
     address _operatorVaultAddress,
     address _vaultManagerAddress
   ) public initializer {
@@ -136,11 +138,15 @@ contract ClearingHouse is
 
     if (_usdcAddress == address(0)) revert InvalidAddress();
     if (_adminAddress == address(0)) revert InvalidAddress();
+    if (_operatorAddress == address(0)) revert InvalidAddress();
     if (_vaultManagerAddress == address(0)) revert InvalidAddress();
 
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     $.token = IERC20(_usdcAddress);
     $.adminAddress = _adminAddress;
+
+    $.operators[_operatorAddress] = true;
+    $.operatorList.push(_operatorAddress);
     $.operatorVaultAddress = _operatorVaultAddress;
     $.vaultManager = IVaultManager(_vaultManagerAddress);
     $.forceWithdrawalDelay = DEFAULT_FORCE_WITHDRAWAL_DELAY;
@@ -402,18 +408,6 @@ contract ClearingHouse is
     $.token.safeTransfer($.operatorVaultAddress, currentTreasuryAmount);
   }
 
-  function retrieveMisplacedETH() external onlyAdmin {
-    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
-    payable($.adminAddress).transfer(address(this).balance);
-  }
-
-  function retrieveMisplacedTokens(address _token) external onlyAdmin {
-    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
-    if (address($.token) != _token) revert InvalidTokenAddress();
-    IERC20 token = IERC20(_token);
-    token.safeTransfer($.adminAddress, token.balanceOf(address(this)));
-  }
-
   function userBalances(address user) external view returns (uint256) {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     return $.userBalances[user];
@@ -422,11 +416,6 @@ contract ClearingHouse is
   function treasuryAmount() external view returns (uint256) {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     return $.treasuryAmount;
-  }
-
-  function addTreasuryAmount(uint256 amount) external nonReentrant onlyOperator {
-    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
-    $.treasuryAmount += amount;
   }
 
   function setAdmin(address _adminAddress) external onlyOwner {
@@ -476,6 +465,8 @@ contract ClearingHouse is
   }
 
   function addUserBalance(address user, uint256 amount) external nonReentrant onlyOperator {
+    if (amount > MAX_OPERATOR_CHANGE_AMOUNT) revert AmountExceedsLimit();
+
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     $.userBalances[user] += amount;
 
@@ -488,6 +479,8 @@ contract ClearingHouse is
   }
 
   function subtractUserBalance(address user, uint256 amount) external nonReentrant onlyOperator {
+    if (amount > MAX_OPERATOR_CHANGE_AMOUNT) revert AmountExceedsLimit();
+
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     if ($.userBalances[user] < amount) revert InsufficientBalance();
     $.userBalances[user] -= amount;
@@ -583,6 +576,18 @@ contract ClearingHouse is
 
   function unpause() external whenPaused onlyAdmin {
     _unpause();
+  }
+
+  function retrieveMisplacedETH() external onlyAdmin {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    payable($.adminAddress).transfer(address(this).balance);
+  }
+
+  function retrieveMisplacedTokens(address _token) external onlyAdmin {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    if (address($.token) == _token) revert InvalidTokenAddress();
+    IERC20 token = IERC20(_token);
+    token.safeTransfer($.adminAddress, token.balanceOf(address(this)));
   }
 
   /* public views */
@@ -751,14 +756,6 @@ contract ClearingHouse is
     return elapsedHours;
   }
 
-  // function useCoupon(
-  //   address user,
-  //   uint256 amount,
-  //   uint256 epoch
-  // ) external nonReentrant onlyOperator returns (uint256) {
-  //   return _useCoupon(user, amount, epoch);
-  // }
-
   function _useCoupon(address user, uint256 amount, uint256 epoch) internal returns (uint256) {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     uint256 remainingAmount = amount;
@@ -856,22 +853,7 @@ contract ClearingHouse is
         $.vaultManager.subtractVaultBalance(product, user, remainingAmount);
       }
     }
-    emit DebugLog(
-      string.concat(
-        "Product: ",
-        Strings.toHexString(product),
-        " Order ",
-        Strings.toString(idx),
-        ": Lock in escrow for ",
-        Strings.toHexString(user),
-        " total amount: ",
-        Strings.toString(amount),
-        " coupon: ",
-        Strings.toString(amount - remainingAmount),
-        " balance: ",
-        Strings.toString(remainingAmount)
-      )
-    );
+
     emit LockInEscrow(product, user, epoch, idx, amount, amount - remainingAmount, remainingAmount);
   }
 
@@ -950,22 +932,7 @@ contract ClearingHouse is
     // Validate total escrowed amount
     uint256 totalEscrowed = $.productEscrowCoupons[product][epoch][user][idx] +
       $.productEscrowBalances[product][epoch][user][idx];
-    emit DebugLog(
-      string.concat(
-        "Product: ",
-        Strings.toHexString(product),
-        " Order ",
-        Strings.toString(idx),
-        ": Release from escrow for ",
-        Strings.toHexString(user),
-        " total escrowed: ",
-        Strings.toString(totalEscrowed),
-        " amount: ",
-        Strings.toString(amount),
-        " fee: ",
-        Strings.toString(fee)
-      )
-    );
+
     if (totalEscrowed < amount) revert InsufficientBalance();
     uint256 amountAfterFee = amount - fee;
 
@@ -1086,6 +1053,8 @@ contract ClearingHouse is
     return $.productEscrowCoupons[product][epoch][user][idx];
   }
 
+  /// @notice Deposit tokens to the clearing house only for baseVolManager
+  /// @param amount The amount of tokens to deposit
   function baseVolManagerDeposit(uint256 amount) external onlyBaseVolManager nonReentrant {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     $.token.safeTransferFrom(msg.sender, address(this), amount);
@@ -1093,6 +1062,8 @@ contract ClearingHouse is
     emit Deposit(msg.sender, msg.sender, amount, $.userBalances[msg.sender]);
   }
 
+  /// @notice Withdraw tokens from the clearing house only for baseVolManager
+  /// @param amount The amount of tokens to withdraw
   function baseVolManagerWithdraw(uint256 amount) external onlyBaseVolManager nonReentrant {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     // withdrawalFee is not used for now

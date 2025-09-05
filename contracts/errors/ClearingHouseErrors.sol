@@ -5,12 +5,7 @@ import { ICommonErrors } from "./CommonErrors.sol";
 interface IClearingHouseErrors is ICommonErrors {
   error InvalidIdx();
   error RequestAlreadyProcessed();
-  error ClearingHouseSpecificError();
-  error InvalidSettlement();
-  error InvalidCommissionFee();
   error InvalidTokenAddress();
-  error RequestNotFound();
-  error WithdrawalTooEarly();
   error ForceWithdrawalRequestNotFound();
   error ForceWithdrawalTooEarly();
   error ExistingForceWithdrawalRequest();
@@ -22,4 +17,5 @@ interface IClearingHouseErrors is ICommonErrors {
   error ProductNotActive();
   error OperatorAlreadyExists();
   error BaseVolManagerAlreadyExists();
+  error AmountExceedsLimit();
 }

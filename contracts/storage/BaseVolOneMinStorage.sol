@@ -8,9 +8,9 @@ import { Round, OneMinOrder, SettlementResult, WithdrawalRequest, Coupon, PriceI
 import { PythLazer } from "../libraries/PythLazer.sol";
 
 library BaseVolOneMinStorage {
-  // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.onemin")) - 1)) & ~bytes32(uint256(0xff));
+  // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.onemin.secure")) - 1)) & ~bytes32(uint256(0xff));
   bytes32 internal constant SLOT =
-    0xf47b8291f4eb0ba594d826a8a543e71011d93618498a6b680f32cdb25823c400;
+    0x8be1692dc372f8902eb9c7cd5d19a5bdd4af3b9d33c637a94997c776bf7c1c00;
 
   struct Layout {
     IERC20 token; // Prediction token

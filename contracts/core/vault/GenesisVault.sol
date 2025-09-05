@@ -274,8 +274,6 @@ contract GenesisVault is Initializable, GenesisManagedVault {
       );
     }
 
-    if (cost > 0) IGenesisStrategy(strategy()).reserveExecutionCost(cost);
-
     return withdrawKey;
   }
 
@@ -323,8 +321,6 @@ contract GenesisVault is Initializable, GenesisManagedVault {
         sharesToRequest
       );
     }
-
-    if (cost > 0) IGenesisStrategy(strategy()).reserveExecutionCost(cost);
 
     return withdrawKey;
   }
@@ -447,10 +443,6 @@ contract GenesisVault is Initializable, GenesisManagedVault {
       withdrawRequest.isPrioritized,
       withdrawRequest.accRequestedWithdrawAssets
     );
-    if (isLast) {
-      // call processAssetsToWithdraw() only when last to avoid normals being reverted.
-      IGenesisStrategy(strategy()).processAssetsToWithdraw();
-    }
     bool isExecuted = _isExecuted(
       isLast,
       withdrawRequest.isPrioritized,
@@ -562,9 +554,6 @@ contract GenesisVault is Initializable, GenesisManagedVault {
     (uint256 shares, uint256 cost) = _previewDepositWithCost(assets);
 
     _deposit(_msgSender(), receiver, assets, shares);
-
-    if (cost > 0) IGenesisStrategy(strategy()).reserveExecutionCost(cost);
-
     return shares;
   }
 
@@ -578,9 +567,6 @@ contract GenesisVault is Initializable, GenesisManagedVault {
     (uint256 assets, uint256 cost) = _previewMintWithCost(shares);
 
     _deposit(_msgSender(), receiver, assets, shares);
-
-    if (cost > 0) IGenesisStrategy(strategy()).reserveExecutionCost(cost);
-
     return assets;
   }
 
@@ -599,9 +585,6 @@ contract GenesisVault is Initializable, GenesisManagedVault {
     (uint256 shares, uint256 cost) = _previewWithdrawWithCost(assets);
 
     _withdraw(_msgSender(), receiver, owner, assets, shares);
-
-    if (cost > 0) IGenesisStrategy(strategy()).reserveExecutionCost(cost);
-
     return shares;
   }
 
@@ -620,9 +603,6 @@ contract GenesisVault is Initializable, GenesisManagedVault {
     (uint256 assets, uint256 cost) = _previewRedeemWithCost(shares);
 
     _withdraw(_msgSender(), receiver, owner, assets, shares);
-
-    if (cost > 0) IGenesisStrategy(strategy()).reserveExecutionCost(cost);
-
     return assets;
   }
 

@@ -5,9 +5,9 @@ import { VaultInfo, VaultMember } from "../types/Types.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
 
 library VaultManagerStorage {
-  // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.vault")) - 1)) & ~bytes32(uint256(0xff));
+  // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.vault.secure")) - 1)) & ~bytes32(uint256(0xff));
   bytes32 internal constant SLOT =
-    0xe94951ea449da5406b0ed180fb989c557b0b8abc4e4c7268f9c7dd3acb05ac00;
+    0xea3b1d7ca1ebf098300cc1ec860093e4cd9adedd8feb804f8268ccf691708c00;
 
   struct Layout {
     IClearingHouse clearingHouse; // Clearing house

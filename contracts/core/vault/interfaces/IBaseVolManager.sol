@@ -7,11 +7,11 @@ pragma solidity ^0.8.4;
 interface IBaseVolManager {
   /// @notice Deposits assets to ClearingHouse
   /// @param amount The amount of assets to deposit
-  function depositToClearingHouse(uint256 amount, address strategy) external;
+  function depositToClearingHouse(uint256 amount) external;
 
   /// @notice Withdraws assets from ClearingHouse
   /// @param amount The amount of assets to withdraw
-  function withdrawFromClearingHouse(uint256 amount, address strategy) external;
+  function withdrawFromClearingHouse(uint256 amount) external;
 
   /// @notice Gets the ClearingHouse balance
   /// @return The balance of the ClearingHouse

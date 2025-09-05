@@ -13,6 +13,7 @@ import { IGenesisVault } from "./interfaces/IGenesisVault.sol";
 import { IGenesisStrategy } from "./interfaces/IGenesisStrategy.sol";
 import { BaseVolManagerStorage } from "./storage/BaseVolManagerStorage.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { Strings } from "@openzeppelin/contracts/utils/Strings.sol";
 
 contract BaseVolManager is
   Initializable,
@@ -22,6 +23,7 @@ contract BaseVolManager is
   ReentrancyGuardUpgradeable
 {
   using SafeERC20 for IERC20;
+  using Strings for uint256;
 
   event DepositedToClearingHouse(
     address indexed strategy,
@@ -44,6 +46,7 @@ contract BaseVolManager is
     uint256 minStrategyDeposit,
     uint256 maxTotalExposure
   );
+  event DebugLog(string message);
 
   error InsufficientBalance();
   error InvalidAmount();
@@ -68,19 +71,15 @@ contract BaseVolManager is
     _disableInitializers();
   }
 
-  function initialize(
-    address _asset,
-    address _clearingHouse,
-    address _strategy
-  ) external initializer {
+  function initialize(address _clearingHouse, address _strategy) external initializer {
     __UUPSUpgradeable_init();
     __Ownable_init(msg.sender);
     __Pausable_init();
     __ReentrancyGuard_init();
 
+    address _asset = IGenesisStrategy(_strategy).asset();
     BaseVolManagerStorage.Layout storage $ = BaseVolManagerStorage.layout();
 
-    require(_asset != address(0), "Invalid asset address");
     require(_clearingHouse != address(0), "Invalid ClearingHouse address");
 
     $.asset = IERC20(_asset);
@@ -91,6 +90,10 @@ contract BaseVolManager is
     $.maxStrategyDeposit = 1000000e6; // 1M USDC
     $.minStrategyDeposit = 10e6; // 10 USDC
     $.maxTotalExposure = 10000000e6; // 10M USDC
+
+    // Approve USDC spending for ClearingHouse and Strategy
+    $.asset.approve(_clearingHouse, type(uint256).max);
+    $.asset.approve(_strategy, type(uint256).max);
   }
 
   /// @notice Deposits assets from Strategy to ClearingHouse
@@ -107,23 +110,15 @@ contract BaseVolManager is
     // Check if total exposure would exceed limit
     if ($.totalUtilized + amount > $.maxTotalExposure) revert ExceedsMaxExposure();
 
-    // Transfer assets from Strategy to BaseVolManager
-    $.asset.safeTransferFrom(msg.sender, address(this), amount);
-
-    // Approve ClearingHouse to spend assets
-    $.asset.approve(address($.clearingHouse), amount);
-
     try $.clearingHouse.baseVolManagerDeposit(amount) {
       // Update global state
       $.totalDeposited += amount;
       $.totalUtilized += amount;
-
       emit DepositedToClearingHouse(
         $.strategy,
         amount,
         $.clearingHouse.userBalances(address(this))
       );
-
       // Call strategy callback on success
       IGenesisStrategy($.strategy).depositCompletedCallback(amount, true);
     } catch {
@@ -154,7 +149,10 @@ contract BaseVolManager is
         $.clearingHouse.userBalances(address(this))
       );
 
-      // Call strategy callback on success
+      IERC20 _asset = $.asset;
+      _asset.safeTransfer(strategy(), amount);
+
+      // Instead, call the strategy callback to let it handle the asset transfer
       IGenesisStrategy($.strategy).withdrawCompletedCallback(amount, true);
     } catch {
       // Failure - call strategy callback on failure
@@ -197,6 +195,13 @@ contract BaseVolManager is
 
     BaseVolManagerStorage.Layout storage $ = BaseVolManagerStorage.layout();
     address oldClearingHouse = address($.clearingHouse);
+
+    // Revoke approval from old ClearingHouse
+    $.asset.approve(oldClearingHouse, 0);
+
+    // Approve new ClearingHouse
+    $.asset.approve(newClearingHouse, type(uint256).max);
+
     $.clearingHouse = IClearingHouse(newClearingHouse);
 
     emit ClearingHouseUpdated(oldClearingHouse, newClearingHouse);

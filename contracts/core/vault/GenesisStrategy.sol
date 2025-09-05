@@ -11,6 +11,7 @@ import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { SafeCast } from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import { ReentrancyGuardUpgradeable } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import { Strings } from "@openzeppelin/contracts/utils/Strings.sol";
 
 import { IGenesisVault } from "./interfaces/IGenesisVault.sol";
 import { IBaseVolManager } from "./interfaces/IBaseVolManager.sol";
@@ -29,6 +30,7 @@ contract GenesisStrategy is
   using Math for uint256;
   using SafeERC20 for IERC20;
   using SafeCast for uint256;
+  using Strings for uint256;
 
   uint256 internal constant FLOAT_PRECISION = 1e18;
 
@@ -74,7 +76,6 @@ contract GenesisStrategy is
   function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
   function initialize(
-    address _asset,
     address _vault,
     address _clearingHouse,
     address _operator
@@ -84,11 +85,11 @@ contract GenesisStrategy is
     __Pausable_init();
     __ReentrancyGuard_init();
 
-    require(_asset != address(0), "Invalid asset address");
     require(_vault != address(0), "Invalid vault address");
     require(_clearingHouse != address(0), "Invalid ClearingHouse address");
     require(_operator != address(0), "Invalid operator address");
 
+    address _asset = IGenesisVault(_vault).asset();
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
     $.asset = IERC20(_asset);
@@ -99,14 +100,14 @@ contract GenesisStrategy is
     _setMaxUtilizePct(1 ether); // no cap by default(100%)
   }
 
-  function utilize(uint256 amount) public authCaller(operator()) whenIdle nonReentrant {
+  function utilize(uint256 amount) public authCaller(operator()) nonReentrant {
     _utilize(amount);
   }
 
   /// @notice Utilizes assets from Vault to ClearingHouse for BaseVol orders.
   /// @dev Uses assets in vault. Callable only by the operator.
   /// @param amount The underlying asset amount to be utilized.
-  function _utilize(uint256 amount) internal whenIdle nonReentrant {
+  function _utilize(uint256 amount) internal whenIdle {
     _setStrategyStatus(StrategyStatus.UTILIZING);
 
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
@@ -117,7 +118,21 @@ contract GenesisStrategy is
     }
 
     uint256 maxUtilization = _vault.idleAssets().mulDiv(maxUtilizePct(), FLOAT_PRECISION);
+    emit DebugLog(
+      string(abi.encodePacked("Max utilization calculated: ", maxUtilization.toString()))
+    );
+
     if (amount > maxUtilization) {
+      emit DebugLog(
+        string(
+          abi.encodePacked(
+            "Amount adjusted from ",
+            amount.toString(),
+            " to ",
+            maxUtilization.toString()
+          )
+        )
+      );
       amount = maxUtilization;
     }
 
@@ -126,13 +141,15 @@ contract GenesisStrategy is
     }
 
     IERC20 _asset = $.asset;
+    emit DebugLog(
+      string(
+        abi.encodePacked("Transferring ", amount.toString(), " assets from vault to baseVolManager")
+      )
+    );
+    _asset.safeTransferFrom(address(_vault), address(baseVolManager()), amount);
 
-    // Transfer assets from Vault to Strategy
-    _asset.safeTransferFrom(address(_vault), address(this), amount);
-
-    // Deposit to ClearingHouse through BaseVolManager
-    _asset.approve(address($.baseVolManager), amount);
-    $.baseVolManager.depositToClearingHouse(amount, address(this));
+    $.baseVolManager.depositToClearingHouse(amount);
+    emit DebugLog("_utilize function completed successfully");
   }
 
   /// @notice Callback function called by BaseVolManager after deposit completion
@@ -142,31 +159,31 @@ contract GenesisStrategy is
   function depositCompletedCallback(
     uint256 amount,
     bool success
-  ) external authCaller(baseVolManager()) nonReentrant {
+  ) external authCaller(baseVolManager()) {
     if (success) {
       // Update strategy state
       GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
       $.utilizedAssets += amount;
       $.strategyBalance += amount;
-
       emit Utilize(_msgSender(), amount, 0);
     }
 
     if (success) {
       _setStrategyStatus(StrategyStatus.IDLE);
     } else {
+      // TODO: handle failed utilize
       emit DebugLog("Utilize operation failed");
     }
   }
 
   /// @notice Deutilizes assets from ClearingHouse back to Vault.
   /// @dev Callable only by the operator.
-  function deutilize() public authCaller(operator()) whenIdle nonReentrant {
+  function deutilize() public authCaller(operator()) nonReentrant {
     _deutilize();
   }
 
   /// @notice Internal deutilize function for internal calls
-  function _deutilize() internal {
+  function _deutilize() internal whenIdle {
     _setStrategyStatus(StrategyStatus.DEUTILIZING);
 
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
@@ -188,7 +205,7 @@ contract GenesisStrategy is
       }
       return;
     }
-    $.baseVolManager.withdrawFromClearingHouse(withdrawAmount, address(this));
+    $.baseVolManager.withdrawFromClearingHouse(withdrawAmount);
   }
 
   function _calculateWithdrawAmount(uint256 currentBalance) internal view returns (uint256) {
@@ -219,10 +236,29 @@ contract GenesisStrategy is
   function withdrawCompletedCallback(
     uint256 amount,
     bool success
-  ) external authCaller(baseVolManager()) nonReentrant {
+  ) external authCaller(baseVolManager()) {
     if (success) {
-      // Update strategy state
       GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+
+      // collect asset from baseVolManager
+      IERC20 _asset = $.asset;
+
+      // Allowance 디버그 정보 출력
+      uint256 allowance = _asset.allowance(baseVolManager(), address(this));
+      uint256 balance = _asset.balanceOf(baseVolManager());
+
+      emit DebugLog(
+        string(
+          abi.encodePacked(
+            "withdrawCompletedCallback - Allowance: ",
+            allowance.toString(),
+            ", BaseVolManager Balance: ",
+            balance.toString(),
+            ", Requested Amount: ",
+            amount.toString()
+          )
+        )
+      );
 
       // Check the actual ClearingHouse balance for profit/loss calculation
       uint256 actualClearingHouseBalance = $.baseVolManager.clearingHouseBalance();
@@ -250,7 +286,6 @@ contract GenesisStrategy is
       }
 
       // Transfer assets back to Vault
-      IERC20 _asset = $.asset;
       _asset.safeTransfer(address(vault()), amount);
 
       // Update state
@@ -475,6 +510,10 @@ contract GenesisStrategy is
     }
 
     netPerformance = int256(totalProfit) - int256(totalLoss);
+  }
+
+  function setStrategyStatus(StrategyStatus newStatus) external authCaller(operator()) {
+    _setStrategyStatus(newStatus);
   }
 
   /*//////////////////////////////////////////////////////////////

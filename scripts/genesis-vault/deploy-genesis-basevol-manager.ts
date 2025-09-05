@@ -50,15 +50,13 @@ const main = async () => {
     const BaseVolManager = await ethers.getContractFactory("BaseVolManager");
 
     const initParams = [
-      config.Address.Usdc[networkName], // _asset (USDC)
       config.Address.ClearingHouse[networkName], // _clearingHouse
       GENESIS_STRATEGY_ADDRESS,
     ];
 
     console.log("Initialization parameters:");
-    console.log("- Asset (USDC):", initParams[0]);
-    console.log("- ClearingHouse:", initParams[1]);
-    console.log("- Strategy:", initParams[2]);
+    console.log("- ClearingHouse:", initParams[0]);
+    console.log("- Strategy:", initParams[1]);
 
     // 타입 캐스팅으로 수정
     const baseVolManager = (await upgrades.deployProxy(BaseVolManager, initParams, {

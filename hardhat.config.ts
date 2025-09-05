@@ -10,9 +10,9 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-const mnemonic = fs.existsSync(".secret")
+const privateKey = fs.existsSync(".secret")
   ? fs.readFileSync(".secret").toString().trim()
-  : "test test test test test test test test test test test junk";
+  : "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 const apiKey = process.env.ALCHEMY_API_KEY;
 
@@ -31,9 +31,7 @@ export default {
       gas: 22000000,
       gasPrice: "auto",
       allowUnlimitedContractSize: true,
-      accounts: {
-        mnemonic,
-      },
+      accounts: [privateKey],
       chainId: 8453,
       timeout: 120000,
     },
@@ -42,9 +40,7 @@ export default {
       gas: 22000000,
       gasPrice: "auto",
       allowUnlimitedContractSize: true,
-      accounts: {
-        mnemonic,
-      },
+      accounts: [privateKey],
       chainId: 84532,
       timeout: 120000,
     },

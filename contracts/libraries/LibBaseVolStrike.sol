@@ -9,7 +9,7 @@ import { Round, FilledOrder, SettlementResult, WithdrawalRequest, Coupon, PriceI
 import { PythLazer } from "../libraries/PythLazer.sol";
 
 library LibBaseVolStrike {
-  bytes32 constant DIAMOND_STORAGE_POSITION = keccak256("basevol.diamond.storage");
+  bytes32 constant DIAMOND_STORAGE_POSITION = keccak256("basevol.diamond.storage.secure");
 
   uint256 private constant PRICE_UNIT = 1e6;
   uint256 private constant BASE = 10000; // 100%
