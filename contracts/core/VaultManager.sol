@@ -498,7 +498,7 @@ contract VaultManager is
 
         if (members[i].balance != 0) {
           uint256 originalDepositRatio = (members[i].balance * (userVaultValue - withdrawValue)) /
-            userValue;
+            userVaultValue;
           members[i].balance -= originalDepositRatio;
         }
         members[i].shares -= sharesToWithdraw;
