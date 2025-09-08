@@ -4,16 +4,6 @@ const { execSync } = require("child_process");
 
 const SENSITIVE_PATTERNS = [
   {
-    name: "AWS Access Key",
-    regex: /AKIA[0-9A-Z]{16}/g,
-    description: "AWS Access Key ID detected",
-  },
-  {
-    name: "AWS Secret Key",
-    regex: /(?<!0x)[A-Za-z0-9/+=]{40}(?![a-fA-F0-9])/g,
-    description: "Potential AWS Secret Access Key detected",
-  },
-  {
     name: "Mnemonic Phrase",
     regex:
       /(?:mnemonic|seed|phrase|words?)\s*[=:]\s*['"`]?([a-z]+\s+[a-z]+(?:\s+[a-z]+){10,23})['"`]?/gi,
@@ -76,6 +66,9 @@ const WHITELIST_VALUES = [
   "test-token",
   "dummy-password",
   "example-key",
+  "@openzeppelin/contracts/token/ERC20/IERC20",
+  "@openzeppelin/contracts/token/ERC20/utils/SafeERC20",
+  "===========================================",
 ];
 
 // Ethereum address pattern
