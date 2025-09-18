@@ -3,6 +3,7 @@ pragma solidity ^0.8.4;
 pragma abicoder v2;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { IERC4626 } from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import { ERC4626Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -10,28 +11,20 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { SafeCast } from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import { IERC165 } from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import { GenesisManagedVault } from "./GenesisManagedVault.sol";
 import { GenesisVaultStorage } from "./storage/GenesisVaultStorage.sol";
 import { IGenesisVaultErrors } from "./errors/GenesisVaultErrors.sol";
 import { IGenesisStrategy } from "./interfaces/IGenesisStrategy.sol";
+import { IERC7540 } from "./interfaces/IERC7540.sol";
 
-contract GenesisVault is Initializable, GenesisManagedVault {
+contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   using Math for uint256;
   using SafeERC20 for IERC20;
   using SafeCast for uint256;
 
   uint256 constant MAX_COST = 0.10 ether; // 10%
 
-  event WithdrawRequested(
-    address indexed caller,
-    address indexed receiver,
-    address indexed owner,
-    bytes32 withdrawKey,
-    uint256 assets,
-    uint256 shares
-  );
-
-  event Claimed(address indexed claimer, bytes32 withdrawKey, uint256 assets);
   event Shutdown(address account);
   event AdminUpdated(address indexed account, address indexed newAdmin);
   event StrategyUpdated(address account, address newStrategy);
@@ -42,6 +35,8 @@ contract GenesisVault is Initializable, GenesisManagedVault {
   event VaultState(uint256 indexed totalAssets, uint256 indexed totalSupply);
   event PrioritizedAccountAdded(address indexed account);
   event PrioritizedAccountRemoved(address indexed account);
+
+  // ERC7540 Events (use OpenZeppelin's Withdraw/Redeem events)
 
   modifier onlyAdmin() {
     if (_msgSender() != admin()) {
@@ -63,6 +58,19 @@ contract GenesisVault is Initializable, GenesisManagedVault {
 
     _setEntryCost(entryCost_);
     _setExitCost(exitCost_);
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                            ERC165 SUPPORT
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice ERC165 interface support
+  function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+    return
+      interfaceId == type(IERC7540).interfaceId ||
+      interfaceId == type(IERC4626).interfaceId ||
+      interfaceId == type(IERC20).interfaceId ||
+      interfaceId == type(IERC165).interfaceId;
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -179,18 +187,17 @@ contract GenesisVault is Initializable, GenesisManagedVault {
   function sweep(address receiver) external onlyOwner {
     // 1. all shares should be redeemed.
     // 2. utilized assets should be zero that means all requests have been processed.
-    // 3. assetsToClaim should be zero that means all requests have been claimed.
+    // 3. All assets should be withdrawn from strategy and no pending requests should remain.
     require(
       totalSupply() == 0 &&
         IGenesisStrategy(strategy()).utilizedAssets() == 0 &&
-        assetsToClaim() == 0
+        totalPendingWithdraw() == 0
     );
 
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    // sweep pending states
-    delete $.accRequestedWithdrawAssets;
-    delete $.processedWithdrawAssets;
+    // ERC7540: sweep ERC7540 pending states if needed
+    // Note: In normal operation, these should already be zero
 
     // sweep prioritized accounts array
     delete $.prioritizedAccounts;
@@ -207,17 +214,134 @@ contract GenesisVault is Initializable, GenesisManagedVault {
   }
 
   /*//////////////////////////////////////////////////////////////
+                          ERC7540 OPERATOR SYSTEM
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice Set or unset an operator for the caller
+  /// @param operator The address to set as operator
+  /// @param approved Whether to approve or revoke the operator
+  /// @return success Whether the operation was successful
+  function setOperator(address operator, bool approved) external override returns (bool) {
+    GenesisVaultStorage.layout().operators[_msgSender()][operator] = approved;
+    emit OperatorSet(_msgSender(), operator, approved);
+    return true;
+  }
+
+  /// @notice Check if an address is an operator for a controller
+  /// @param controller The address that owns the requests
+  /// @param operator The address to check for operator status
+  /// @return Whether the operator is approved
+  function isOperator(address controller, address operator) external view override returns (bool) {
+    return GenesisVaultStorage.layout().operators[controller][operator];
+  }
+
+  /// @dev Modifier for operator access control
+  modifier onlyControllerOrOperator(address controller) {
+    require(
+      _msgSender() == controller ||
+        GenesisVaultStorage.layout().operators[controller][_msgSender()],
+      "GenesisVault: not authorized"
+    );
+    _;
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                          ERC7540 ASYNC DEPOSIT LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice Submit a request for asynchronous deposit
+  /// @param assets The amount of assets to deposit
+  /// @param controller The address that will control the request
+  /// @param owner The address that owns the assets
+  /// @return requestId The ID of the request
+  function requestDeposit(
+    uint256 assets,
+    address controller,
+    address owner
+  ) external override returns (uint256 requestId) {
+    require(assets > 0, "GenesisVault: zero assets");
+    require(!paused() && !isShutdown(), "GenesisVault: vault not active");
+
+    // ERC7540: owner MUST equal msg.sender unless owner has approved msg.sender as operator
+    require(
+      _msgSender() == owner || GenesisVaultStorage.layout().operators[owner][_msgSender()],
+      "GenesisVault: not authorized"
+    );
+
+    // Essential: Validate against deposit limits
+    uint256 maxDepositAmount = maxDeposit(owner);
+    require(assets <= maxDepositAmount, "GenesisVault: deposit exceeds limit");
+
+    // Transfer assets to vault
+    IERC20(asset()).safeTransferFrom(owner, address(this), assets);
+
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    requestId = $.nextRequestId++;
+
+    $.depositRequests[requestId] = GenesisVaultStorage.DepositRequest({
+      assets: assets,
+      controller: controller,
+      owner: owner,
+      timestamp: block.timestamp,
+      isClaimed: false
+    });
+
+    $.pendingDepositAssets[controller] += assets;
+    $.accRequestedDepositAssets += assets;
+
+    emit DepositRequest(controller, owner, requestId, _msgSender(), assets);
+
+    // Auto-process if possible
+    processPendingDepositRequests();
+
+    return requestId;
+  }
+
+  /// @notice Process pending deposit requests with available capacity - Pure Pool O(1)
+  /// @return The assets processed into claimable state
+  function processPendingDepositRequests() public returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+
+    uint256 availableCapacity = _calculateAvailableDepositCapacity();
+    if (availableCapacity == 0) return 0;
+
+    uint256 pendingAssets = $.accRequestedDepositAssets - $.processedDepositAssets;
+    uint256 assetsToProcess = Math.min(availableCapacity, pendingAssets);
+
+    if (assetsToProcess > 0) {
+      $.processedDepositAssets += assetsToProcess;
+      // Pure Pool: No individual request processing needed!
+      // Claimable amounts are calculated dynamically in _calculateClaimableDepositAssets
+    }
+
+    return assetsToProcess;
+  }
+
+  /// @notice Returns the amount of pending deposit assets for a controller
+  function pendingDepositRequest(address controller) external view override returns (uint256) {
+    return GenesisVaultStorage.layout().pendingDepositAssets[controller];
+  }
+
+  /// @notice Returns the amount of claimable deposit assets for a controller
+  /// @dev Pure Pool: Calculates claimable assets dynamically using proportional shares
+  function claimableDepositRequest(address controller) external view override returns (uint256) {
+    return _calculateClaimableDepositAssets(controller);
+  }
+
+  /*//////////////////////////////////////////////////////////////
                           ASYNC WITHDRAW LOGIC
     //////////////////////////////////////////////////////////////*/
 
   /// @notice Returns the maximum amount of the underlying asset that can be
   /// requested to withdraw from the owner balance in the Vault,
-  /// through a requestWithdraw call.
+  /// through a requestRedeem call (ERC7540 uses requestRedeem for both)
   function maxRequestWithdraw(address owner) public view returns (uint256) {
     if (paused()) {
       return 0;
     }
-    return super.maxWithdraw(owner);
+    // Return max assets based on owner's shares (for redeem requests)
+    uint256 shares = balanceOf(owner);
+    return _convertToAssets(shares, Math.Rounding.Floor);
   }
 
   /// @notice Returns the maximum amount of Vault shares that can be
@@ -227,102 +351,23 @@ contract GenesisVault is Initializable, GenesisManagedVault {
     if (paused()) {
       return 0;
     }
-    return super.maxRedeem(owner);
+    // Return owner's share balance for redeem requests
+    return balanceOf(owner);
   }
 
-  /// @notice Requests to withdraw assets and returns a unique withdraw key
-  /// if the requested asset amount is bigger than the idle assets.
-  /// If idle assets are available in the Vault, they are withdrawn synchronously
-  /// within the `requestWithdraw` call, while any shortfall amount remains
-  /// pending for execution by the system.
-  ///
-  /// @dev Burns shares from owner and sends exactly assets of underlying tokens
-  /// to receiver if the idle assets is enough.
-  /// If the idle assets is not enough, creates a withdraw request with
-  /// the shortfall assets while sending the idle assets to receiver.
-  ///
-  /// @return withdrawKey The withdraw key that is used in the claim function.
-  function requestWithdraw(
-    uint256 assets,
-    address receiver,
-    address owner
-  ) public virtual returns (bytes32 withdrawKey) {
-    uint256 maxRequestAssets = maxRequestWithdraw(owner);
-    if (assets > maxRequestAssets) {
-      revert ExceededMaxRequestWithdraw(owner, assets, maxRequestAssets);
-    }
-
-    uint256 maxAssets = maxWithdraw(owner);
-    uint256 assetsToWithdraw = assets > maxAssets ? maxAssets : assets;
-    // always assetsToWithdraw <= assets
-    uint256 assetsToRequest = assets - assetsToWithdraw;
-
-    (uint256 shares, uint256 cost) = _previewWithdrawWithCost(assets);
-    uint256 sharesToRedeem = _convertToShares(assetsToWithdraw, Math.Rounding.Ceil);
-    uint256 sharesToRequest = shares - sharesToRedeem;
-
-    if (assetsToWithdraw > 0)
-      _withdraw(_msgSender(), receiver, owner, assetsToWithdraw, sharesToRedeem);
-
-    if (assetsToRequest > 0) {
-      withdrawKey = _requestWithdraw(
-        _msgSender(),
-        receiver,
-        owner,
-        assetsToRequest,
-        sharesToRequest
-      );
-    }
-
-    return withdrawKey;
+  /// @notice ERC7540 - Returns max assets for requestDeposit (same as maxDeposit)
+  function maxRequestDeposit(address owner) public view returns (uint256) {
+    return maxDeposit(owner);
   }
 
-  /// @notice Requests to redeem shares and returns a unique withdraw key
-  /// if the derived asset amount is bigger than the idle assets.
-  /// If idle assets are available in the Vault, they are withdrawn synchronously
-  /// within the `requestWithdraw` call, while any shortfall amount remains
-  /// pending for execution by the system.
-  ///
-  /// @dev Burns exactly shares from owner and sends assets of underlying tokens
-  /// to receiver if the idle assets is enough,
-  /// If the idle assets is not enough, creates a withdraw request with
-  /// the shortfall assets while sending the idle assets to receiver.
-  ///
-  /// @return withdrawKey The withdraw key that is used in the claim function.
-  function requestRedeem(
-    uint256 shares,
-    address receiver,
-    address owner
-  ) public virtual returns (bytes32 withdrawKey) {
-    uint256 maxRequestShares = maxRequestRedeem(owner);
-    if (shares > maxRequestShares) {
-      revert ExceededMaxRequestRedeem(owner, shares, maxRequestShares);
-    }
+  /// @notice ERC7540 - Returns max shares for immediate withdraw (claimable only)
+  function maxClaimableWithdraw(address controller) public view returns (uint256) {
+    return _calculateClaimableRedeemAssets(controller);
+  }
 
-    (uint256 assets, uint256 cost) = _previewRedeemWithCost(shares);
-    uint256 maxAssets = maxWithdraw(owner);
-
-    uint256 assetsToWithdraw = assets > maxAssets ? maxAssets : assets;
-    // always assetsToWithdraw <= assets
-    uint256 assetsToRequest = assets - assetsToWithdraw;
-
-    uint256 sharesToRedeem = _convertToShares(assetsToWithdraw, Math.Rounding.Ceil);
-    uint256 sharesToRequest = shares - sharesToRedeem;
-
-    if (assetsToWithdraw > 0)
-      _withdraw(_msgSender(), receiver, owner, assetsToWithdraw, sharesToRedeem);
-
-    if (assetsToRequest > 0) {
-      withdrawKey = _requestWithdraw(
-        _msgSender(),
-        receiver,
-        owner,
-        assetsToRequest,
-        sharesToRequest
-      );
-    }
-
-    return withdrawKey;
+  /// @notice ERC7540 - Returns max shares for immediate redeem (claimable only)
+  function maxClaimableRedeem(address controller) public view returns (uint256) {
+    return _calculateClaimableRedeemShares(controller);
   }
 
   function _setEntryCost(uint256 value) internal {
@@ -341,173 +386,168 @@ contract GenesisVault is Initializable, GenesisManagedVault {
     }
   }
 
-  /// @dev requestWithdraw/requestRedeem common workflow.
-  function _requestWithdraw(
-    address caller,
-    address receiver,
-    address owner,
-    uint256 assetsToRequest,
-    uint256 sharesToRequest
-  ) internal virtual returns (bytes32) {
-    _updateHwmWithdraw(sharesToRequest);
+  /// @notice ERC7540 redeem request with priority support
+  /// @param shares The amount of shares to redeem
+  /// @param controller The address that will control the request
+  /// @param owner The address that owns the shares
+  /// @return requestId The ID of the request
+  function requestRedeem(
+    uint256 shares,
+    address controller,
+    address owner
+  ) external override returns (uint256 requestId) {
+    require(shares > 0, "GenesisVault: zero shares");
+    require(!paused() && !isShutdown(), "GenesisVault: vault not active");
 
-    if (caller != owner) {
-      _spendAllowance(owner, caller, sharesToRequest);
+    // ERC7540: Redeem Request approval may come from ERC-20 approval OR operator approval
+    if (_msgSender() != owner) {
+      bool hasOperatorApproval = GenesisVaultStorage.layout().operators[owner][_msgSender()];
+      if (!hasOperatorApproval) {
+        _spendAllowance(owner, _msgSender(), shares);
+      }
+      // Note: If operator, no allowance deduction per ERC7540 spec
     }
-    _burn(owner, sharesToRequest);
+    _burn(owner, shares);
 
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    uint256 _accRequestedWithdrawAssets;
+    // 2. Check priority status
     bool isPrioritizedAccount = isPrioritized(owner);
+
+    // 3. Create request
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    requestId = $.nextRequestId++;
+
+    uint256 assets = _convertToAssets(shares, Math.Rounding.Floor);
+
+    $.redeemRequests[requestId] = GenesisVaultStorage.RedeemRequest({
+      shares: shares,
+      assets: assets,
+      controller: controller,
+      owner: owner,
+      timestamp: block.timestamp,
+      isPrioritized: isPrioritizedAccount,
+      isProcessed: false
+    });
+
+    // 4. Update priority-based state
     if (isPrioritizedAccount) {
-      _accRequestedWithdrawAssets = $.prioritizedAccRequestedWithdrawAssets + assetsToRequest;
-      $.prioritizedAccRequestedWithdrawAssets = _accRequestedWithdrawAssets;
+      $.prioritizedAccRequestedRedeemAssets += assets;
     } else {
-      _accRequestedWithdrawAssets = $.accRequestedWithdrawAssets + assetsToRequest;
-      $.accRequestedWithdrawAssets = _accRequestedWithdrawAssets;
+      $.accRequestedRedeemAssets += assets;
     }
 
-    bytes32 withdrawKey = getWithdrawKey(owner, _useNonce(owner));
-    $.withdrawRequests[withdrawKey] = GenesisVaultStorage.WithdrawRequest({
-      requestedAssets: assetsToRequest,
-      accRequestedWithdrawAssets: _accRequestedWithdrawAssets,
-      requestTimestamp: block.timestamp,
-      owner: owner,
-      receiver: receiver,
-      isPrioritized: isPrioritizedAccount,
-      isClaimed: false
-    });
-    emit WithdrawRequested(caller, receiver, owner, withdrawKey, assetsToRequest, sharesToRequest);
+    // 5. Update pending state
+    $.pendingRedeemShares[controller] += shares;
+    $.pendingRedeemAssets[controller] += assets;
 
-    emit VaultState(totalAssets(), totalSupply());
+    emit RedeemRequest(controller, owner, requestId, _msgSender(), shares);
 
-    return withdrawKey;
+    // 6. Attempt automatic processing
+    processRedeemRequests();
+
+    return requestId;
   }
 
-  /// @notice Processes pending withdraw requests with idle assets.
-  ///
-  /// @dev This is a decentralized function that can be called by anyone.
-  ///
-  /// @return The assets used to process pending withdraw requests.
-  function processPendingWithdrawRequests() public returns (uint256) {
+  /// @notice Pure Pool-based redeem processing - O(1) complexity
+  /// @dev Processes pending redemptions using pure pool mathematics without individual request iteration
+  function processRedeemRequests() public returns (uint256) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
     uint256 _idleAssets = idleAssets();
     if (_idleAssets == 0) return 0;
 
-    (uint256 remainingAssets, uint256 processedAssetsForPrioritized) = _calcProcessedAssets(
-      _idleAssets,
-      $.prioritizedProcessedWithdrawAssets,
-      $.prioritizedAccRequestedWithdrawAssets
-    );
-    if (processedAssetsForPrioritized > 0) {
-      $.prioritizedProcessedWithdrawAssets += processedAssetsForPrioritized;
+    uint256 totalProcessed = 0;
+
+    // O(1) Priority Pool Processing
+    uint256 priorityPending = $.prioritizedAccRequestedRedeemAssets -
+      $.prioritizedProcessedRedeemAssets;
+    uint256 priorityToProcess = Math.min(_idleAssets, priorityPending);
+
+    if (priorityToProcess > 0) {
+      $.prioritizedProcessedRedeemAssets += priorityToProcess;
+      totalProcessed += priorityToProcess;
+      _idleAssets -= priorityToProcess;
+
+      // Pure pool: No individual request iteration needed
+      // All controllers with priority requests become proportionally claimable
     }
 
-    if (remainingAssets == 0) {
-      $.assetsToClaim += processedAssetsForPrioritized;
-      return processedAssetsForPrioritized;
+    //  O(1) Normal Pool Processing
+    uint256 normalPending = $.accRequestedRedeemAssets - $.processedRedeemAssets;
+    uint256 normalToProcess = Math.min(_idleAssets, normalPending);
+
+    if (normalToProcess > 0) {
+      $.processedRedeemAssets += normalToProcess;
+      totalProcessed += normalToProcess;
+
+      // Pure pool: No individual request iteration needed
+      // All controllers with normal requests become proportionally claimable
     }
 
-    (, uint256 processedAssets) = _calcProcessedAssets(
-      remainingAssets,
-      $.processedWithdrawAssets,
-      $.accRequestedWithdrawAssets
-    );
+    //  In pure pool system, individual request processing is eliminated
+    // Controllers can claim their proportional share based on:
+    // - Their pending amounts
+    // - Total processed amounts for their priority group
+    // - Current pool ratios
 
-    if (processedAssets > 0) $.processedWithdrawAssets += processedAssets;
-
-    uint256 totalProcessedAssets = processedAssetsForPrioritized + processedAssets;
-
-    if (totalProcessedAssets > 0) {
-      $.assetsToClaim += totalProcessedAssets;
-    }
-
-    return totalProcessedAssets;
+    return totalProcessed;
   }
 
-  /// @notice Claims a withdraw request if it is executed.
-  ///
-  /// @param withdrawRequestKey The withdraw key that was returned by requestWithdraw/requestRedeem.
-  function claim(bytes32 withdrawRequestKey) public virtual returns (uint256) {
+  /// @notice Returns the amount of pending redemption shares for a controller
+  function pendingRedeemRequest(address controller) external view override returns (uint256) {
+    return GenesisVaultStorage.layout().pendingRedeemShares[controller];
+  }
+
+  /// @notice Returns the amount of claimable redemption shares for a controller
+  /// @dev Pure Pool calculation - computed dynamically based on proportional share
+  function claimableRedeemRequest(address controller) external view override returns (uint256) {
+    return _calculateClaimableRedeemShares(controller);
+  }
+
+  /// @notice Calculate claimable redeem shares dynamically using pure pool mathematics
+  function _calculateClaimableRedeemShares(address controller) internal view returns (uint256) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    GenesisVaultStorage.WithdrawRequest memory withdrawRequest = $.withdrawRequests[
-      withdrawRequestKey
-    ];
 
-    if (withdrawRequest.isClaimed) {
-      revert RequestAlreadyClaimed();
-    }
+    uint256 pendingShares = $.pendingRedeemShares[controller];
+    if (pendingShares == 0) return 0;
 
-    bool isLast = _isLast(
-      withdrawRequest.isPrioritized,
-      withdrawRequest.accRequestedWithdrawAssets
-    );
-    bool isExecuted = _isExecuted(
-      isLast,
-      withdrawRequest.isPrioritized,
-      withdrawRequest.accRequestedWithdrawAssets
-    );
+    //  Corrected Pure Pool Calculation
+    bool isPriority = isPrioritized(controller);
 
-    if (!isExecuted) {
-      revert RequestNotExecuted();
-    }
+    if (isPriority) {
+      uint256 totalPriorityRequested = $.prioritizedAccRequestedRedeemAssets;
+      uint256 totalPriorityProcessed = $.prioritizedProcessedRedeemAssets;
+      uint256 totalPriorityClaimed = $.prioritizedClaimedRedeemAssets;
 
-    withdrawRequest.isClaimed = true;
+      // Available for claiming = processed - already claimed
+      uint256 availableForClaim = totalPriorityProcessed - totalPriorityClaimed;
+      if (availableForClaim == 0) return 0;
 
-    $.withdrawRequests[withdrawRequestKey] = withdrawRequest;
+      // Total still pending = requested - claimed
+      uint256 totalPending = totalPriorityRequested - totalPriorityClaimed;
+      if (totalPending == 0) return 0;
 
-    uint256 executedAssets;
-    // separate workflow for last redeem
-    if (isLast) {
-      uint256 _processedWithdrawAssets;
-      uint256 _accRequestedWithdrawAssets;
-      if (withdrawRequest.isPrioritized) {
-        _processedWithdrawAssets = $.prioritizedProcessedWithdrawAssets;
-        _accRequestedWithdrawAssets = $.prioritizedAccRequestedWithdrawAssets;
-      } else {
-        _processedWithdrawAssets = $.processedWithdrawAssets;
-        _accRequestedWithdrawAssets = $.accRequestedWithdrawAssets;
-      }
-      uint256 shortfall = _accRequestedWithdrawAssets - _processedWithdrawAssets;
-
-      if (shortfall > 0) {
-        (, executedAssets) = withdrawRequest.requestedAssets.trySub(shortfall);
-        withdrawRequest.isPrioritized
-          ? $.prioritizedProcessedWithdrawAssets = _accRequestedWithdrawAssets
-          : $.processedWithdrawAssets = _accRequestedWithdrawAssets;
-      } else {
-        uint256 _idleAssets = idleAssets();
-        executedAssets = withdrawRequest.requestedAssets + _idleAssets;
-        $.assetsToClaim += _idleAssets;
-      }
+      // Proportional calculation
+      uint256 pendingAssets = $.pendingRedeemAssets[controller];
+      uint256 claimableAssets = (pendingAssets * availableForClaim) / totalPending;
+      return _convertToShares(claimableAssets, Math.Rounding.Floor);
     } else {
-      executedAssets = withdrawRequest.requestedAssets;
+      uint256 totalNormalRequested = $.accRequestedRedeemAssets;
+      uint256 totalNormalProcessed = $.processedRedeemAssets;
+      uint256 totalNormalClaimed = $.claimedRedeemAssets;
+
+      // Available for claiming = processed - already claimed
+      uint256 availableForClaim = totalNormalProcessed - totalNormalClaimed;
+      if (availableForClaim == 0) return 0;
+
+      // Total still pending = requested - claimed
+      uint256 totalPending = totalNormalRequested - totalNormalClaimed;
+      if (totalPending == 0) return 0;
+
+      // Proportional calculation
+      uint256 pendingAssets = $.pendingRedeemAssets[controller];
+      uint256 claimableAssets = (pendingAssets * availableForClaim) / totalPending;
+      return _convertToShares(claimableAssets, Math.Rounding.Floor);
     }
-
-    $.assetsToClaim -= executedAssets;
-
-    IERC20(asset()).safeTransfer(withdrawRequest.receiver, executedAssets);
-
-    emit Claimed(withdrawRequest.receiver, withdrawRequestKey, executedAssets);
-    return executedAssets;
-  }
-
-  /// @notice Tells if the withdraw request is claimable or not.
-  ///
-  /// @param withdrawRequestKey The withdraw key that was returned by requestWithdraw/requestRedeem.
-  function isClaimable(bytes32 withdrawRequestKey) external view returns (bool) {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    GenesisVaultStorage.WithdrawRequest memory withdrawRequest = $.withdrawRequests[
-      withdrawRequestKey
-    ];
-    bool isExecuted = _isExecuted(
-      _isLast(withdrawRequest.isPrioritized, withdrawRequest.accRequestedWithdrawAssets),
-      withdrawRequest.isPrioritized,
-      withdrawRequest.accRequestedWithdrawAssets
-    );
-
-    return isExecuted && !withdrawRequest.isClaimed;
   }
 
   /// @notice Tells if the owner is prioritized to withdraw.
@@ -522,92 +562,247 @@ contract GenesisVault is Initializable, GenesisManagedVault {
   }
 
   /// @notice The underlying asset amount in this vault that is free to withdraw or utilize.
+  /// @dev ERC7540: Returns the vault's asset balance as idle assets since claims are immediate
   function idleAssets() public view returns (uint256) {
-    return IERC20(asset()).balanceOf(address(this)) - assetsToClaim();
+    //  ERC7540 Pure Pool System:
+    // - Deposit requests: Assets are held in vault until processed into shares
+    // - Redeem requests: Once processed, assets are immediately available for claiming
+    // - When users call withdraw/redeem, assets are immediately transferred out
+    // - No assets are "reserved" or locked in the vault
+    //
+    // Therefore, all assets in the vault are considered "idle" and available
+    // for utilization by the strategy or processing new requests.
+
+    return IERC20(asset()).balanceOf(address(this));
   }
 
-  /// @notice The underlying asset amount requested to withdraw, that is not executed yet.
+  /// @notice ERC7540 - Returns total pending redeem assets (prioritized + normal)
   function totalPendingWithdraw() public view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
     return
-      prioritizedAccRequestedWithdrawAssets() +
-      accRequestedWithdrawAssets() -
-      prioritizedProcessedWithdrawAssets() -
-      processedWithdrawAssets();
-  }
-
-  /// @dev Derives a unique withdraw key based on the user's address and his/her nonce.
-  function getWithdrawKey(address user, uint256 nonce) public view returns (bytes32) {
-    return keccak256(abi.encodePacked(address(this), user, nonce));
+      $.prioritizedAccRequestedRedeemAssets +
+      $.accRequestedRedeemAssets -
+      $.prioritizedProcessedRedeemAssets -
+      $.processedRedeemAssets;
   }
 
   /*//////////////////////////////////////////////////////////////
-                             ERC4626 LOGIC
+                             ERC7540 CLAIM FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-  /// @dev Reserve the execution cost not to affect other's share price.
-  function deposit(uint256 assets, address receiver) public override returns (uint256) {
-    uint256 maxAssets = maxDeposit(receiver);
-    if (assets > maxAssets) {
-      revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
-    }
+  /// @notice ERC7540 deposit (claim from async request) - Pure Pool O(1)
+  /// @param assets The amount of assets to claim
+  /// @param receiver The address to receive the shares
+  /// @param controller The address that controls the request
+  /// @return shares The amount of shares minted
+  function deposit(
+    uint256 assets,
+    address receiver,
+    address controller
+  ) external onlyControllerOrOperator(controller) returns (uint256 shares) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    (uint256 shares, uint256 cost) = _previewDepositWithCost(assets);
+    //  Pure Pool: Dynamic claimable calculation
+    uint256 claimableAssets = _calculateClaimableDepositAssets(controller);
+    require(claimableAssets >= assets, "GenesisVault: insufficient claimable assets");
 
-    _deposit(_msgSender(), receiver, assets, shares);
+    //  Pure Pool: Update pending and claimed amounts correctly
+    $.pendingDepositAssets[controller] -= assets;
+    $.claimedDepositAssets += assets;
+
+    // Convert assets to shares and mint (assets are already in vault)
+    shares = _convertToShares(assets, Math.Rounding.Floor);
+    _mint(receiver, shares);
+
+    //  ERC7540: Emit Deposit event with controller as first parameter
+    emit Deposit(controller, receiver, assets, shares);
+    emit VaultState(totalAssets(), totalSupply());
     return shares;
   }
 
-  /// @dev Reserve the execution cost not to affect other's share price.
-  function mint(uint256 shares, address receiver) public override returns (uint256) {
-    uint256 maxShares = maxMint(receiver);
-    if (shares > maxShares) {
-      revert ERC4626ExceededMaxMint(receiver, shares, maxShares);
-    }
+  /// @notice ERC7540 mint (claim from async request) - Pure Pool O(1)
+  /// @param shares The amount of shares to claim
+  /// @param receiver The address to receive the shares
+  /// @param controller The address that controls the request
+  /// @return assets The amount of assets used
+  function mint(
+    uint256 shares,
+    address receiver,
+    address controller
+  ) external onlyControllerOrOperator(controller) returns (uint256 assets) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    (uint256 assets, uint256 cost) = _previewMintWithCost(shares);
+    assets = _convertToAssets(shares, Math.Rounding.Ceil);
 
-    _deposit(_msgSender(), receiver, assets, shares);
+    //  Pure Pool: Dynamic claimable calculation
+    uint256 claimableAssets = _calculateClaimableDepositAssets(controller);
+    require(claimableAssets >= assets, "GenesisVault: insufficient claimable assets");
+
+    //  Pure Pool: Update pending and claimed amounts correctly
+    $.pendingDepositAssets[controller] -= assets;
+    $.claimedDepositAssets += assets;
+
+    // Mint shares (assets are already in vault)
+    _mint(receiver, shares);
+
+    //  ERC7540: Emit Deposit event with controller as first parameter
+    emit Deposit(controller, receiver, assets, shares);
+    emit VaultState(totalAssets(), totalSupply());
     return assets;
   }
 
-  /// @dev This function only works when there are enough idle assets.
-  ///      For larger amounts, use requestWithdraw instead.
+  /// @notice ERC7540 withdraw with Pure Pool calculation
   function withdraw(
     uint256 assets,
     address receiver,
-    address owner
-  ) public override returns (uint256) {
-    uint256 maxAssets = maxWithdraw(owner);
-    if (assets > maxAssets) {
-      revert ERC4626ExceededMaxWithdraw(owner, assets, maxAssets);
+    address controller
+  ) public override(ERC4626Upgradeable, IERC7540) returns (uint256 shares) {
+    //  ERC7540: controller MUST be msg.sender unless controller has approved msg.sender as operator
+    require(
+      _msgSender() == controller ||
+        GenesisVaultStorage.layout().operators[controller][_msgSender()],
+      "GenesisVault: not authorized"
+    );
+
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+
+    // 1. Pure Pool: Calculate claimable assets dynamically
+    uint256 claimableAssets = _calculateClaimableRedeemAssets(controller);
+    require(claimableAssets >= assets, "GenesisVault: insufficient claimable assets");
+
+    // 2. Calculate shares
+    shares = _convertToShares(assets, Math.Rounding.Ceil);
+
+    // 3. Pure Pool: Deduct directly from pending amounts
+    $.pendingRedeemAssets[controller] -= assets;
+    $.pendingRedeemShares[controller] -= shares;
+
+    // 4. Update pool state (adjust processed amounts)
+    bool isPriority = isPrioritized(controller);
+    if (isPriority) {
+      $.prioritizedProcessedRedeemAssets -= assets;
+    } else {
+      $.processedRedeemAssets -= assets;
     }
 
-    (uint256 shares, uint256 cost) = _previewWithdrawWithCost(assets);
+    // 5. Transfer assets
+    IERC20(asset()).safeTransfer(receiver, assets);
 
-    _withdraw(_msgSender(), receiver, owner, assets, shares);
+    emit Withdraw(_msgSender(), receiver, controller, assets, shares);
     return shares;
   }
 
-  /// @dev This function only works when there are enough idle assets.
-  ///      For larger amounts, use requestRedeem instead.
+  /// @notice Calculate claimable redeem assets using pure pool mathematics
+  function _calculateClaimableRedeemAssets(address controller) internal view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+
+    uint256 pendingAssets = $.pendingRedeemAssets[controller];
+    if (pendingAssets == 0) return 0;
+
+    //  Corrected Pure Pool Calculation
+    bool isPriority = isPrioritized(controller);
+
+    if (isPriority) {
+      uint256 totalPriorityRequested = $.prioritizedAccRequestedRedeemAssets;
+      uint256 totalPriorityProcessed = $.prioritizedProcessedRedeemAssets;
+      uint256 totalPriorityClaimed = $.prioritizedClaimedRedeemAssets;
+
+      // Available for claiming = processed - already claimed
+      uint256 availableForClaim = totalPriorityProcessed - totalPriorityClaimed;
+      if (availableForClaim == 0) return 0;
+
+      // Total still pending = requested - claimed
+      uint256 totalPending = totalPriorityRequested - totalPriorityClaimed;
+      if (totalPending == 0) return 0;
+
+      return (pendingAssets * availableForClaim) / totalPending;
+    } else {
+      uint256 totalNormalRequested = $.accRequestedRedeemAssets;
+      uint256 totalNormalProcessed = $.processedRedeemAssets;
+      uint256 totalNormalClaimed = $.claimedRedeemAssets;
+
+      // Available for claiming = processed - already claimed
+      uint256 availableForClaim = totalNormalProcessed - totalNormalClaimed;
+      if (availableForClaim == 0) return 0;
+
+      // Total still pending = requested - claimed
+      uint256 totalPending = totalNormalRequested - totalNormalClaimed;
+      if (totalPending == 0) return 0;
+
+      return (pendingAssets * availableForClaim) / totalPending;
+    }
+  }
+
+  /// @notice ERC7540 redeem with Pure Pool calculation
   function redeem(
     uint256 shares,
     address receiver,
-    address owner
-  ) public override returns (uint256) {
-    uint256 maxShares = maxRedeem(owner);
-    if (shares > maxShares) {
-      revert ERC4626ExceededMaxRedeem(owner, shares, maxShares);
+    address controller
+  ) public override(ERC4626Upgradeable, IERC7540) returns (uint256 assets) {
+    //  ERC7540: controller MUST be msg.sender unless controller has approved msg.sender as operator
+    require(
+      _msgSender() == controller ||
+        GenesisVaultStorage.layout().operators[controller][_msgSender()],
+      "GenesisVault: not authorized"
+    );
+
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+
+    // 1. Pure Pool: Calculate claimable shares dynamically
+    uint256 claimableShares = _calculateClaimableRedeemShares(controller);
+    require(claimableShares >= shares, "GenesisVault: insufficient claimable shares");
+
+    // 2. Calculate assets
+    assets = _convertToAssets(shares, Math.Rounding.Floor);
+
+    // 3. Pure Pool: Deduct directly from pending amounts
+    $.pendingRedeemShares[controller] -= shares;
+    $.pendingRedeemAssets[controller] -= assets;
+
+    // 4. Update pool state (increase claimed amounts)
+    bool isPriority = isPrioritized(controller);
+    if (isPriority) {
+      $.prioritizedClaimedRedeemAssets += assets;
+    } else {
+      $.claimedRedeemAssets += assets;
     }
 
-    (uint256 assets, uint256 cost) = _previewRedeemWithCost(shares);
+    // 5. Transfer assets
+    IERC20(asset()).safeTransfer(receiver, assets);
 
-    _withdraw(_msgSender(), receiver, owner, assets, shares);
+    emit Withdraw(_msgSender(), receiver, controller, assets, shares);
     return assets;
   }
 
+  /*//////////////////////////////////////////////////////////////
+                        ERC4626 FUNCTIONS (ERC7540 IMPLEMENTATION)
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice ERC4626 deposit - DEPRECATED, use requestDeposit instead
+  /// @dev Reserve the execution cost not to affect other's share price.
+  function deposit(
+    uint256 /* assets */,
+    address /* receiver */
+  ) public pure override(ERC4626Upgradeable, IERC4626) returns (uint256) {
+    revert("DEPRECATED: Use requestDeposit() followed by deposit(assets, receiver, controller)");
+  }
+
+  /// @notice ERC4626 mint - DEPRECATED, use requestDeposit instead
+  function mint(
+    uint256 /* shares */,
+    address /* receiver */
+  ) public pure override(ERC4626Upgradeable, IERC4626) returns (uint256) {
+    revert("DEPRECATED: Use requestDeposit() followed by mint(shares, receiver, controller)");
+  }
+
   /// @inheritdoc ERC4626Upgradeable
-  function totalAssets() public view virtual override returns (uint256 assets) {
+  function totalAssets()
+    public
+    view
+    virtual
+    override(ERC4626Upgradeable, IERC4626)
+    returns (uint256 assets)
+  {
     (, assets) = (idleAssets() + IGenesisStrategy(strategy()).utilizedAssets()).trySub(
       totalPendingWithdraw()
     );
@@ -615,7 +810,9 @@ contract GenesisVault is Initializable, GenesisManagedVault {
   }
 
   /// @inheritdoc ERC4626Upgradeable
-  function previewDeposit(uint256 assets) public view virtual override returns (uint256) {
+  function previewDeposit(
+    uint256 assets
+  ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
     (uint256 shares, ) = _previewDepositWithCost(assets);
     return shares;
   }
@@ -637,7 +834,9 @@ contract GenesisVault is Initializable, GenesisManagedVault {
   }
 
   /// @inheritdoc ERC4626Upgradeable
-  function previewMint(uint256 shares) public view virtual override returns (uint256) {
+  function previewMint(
+    uint256 shares
+  ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
     (uint256 assets, ) = _previewMintWithCost(shares);
     return assets;
   }
@@ -657,10 +856,12 @@ contract GenesisVault is Initializable, GenesisManagedVault {
     return (assets, cost);
   }
 
-  /// @inheritdoc ERC4626Upgradeable
-  function previewWithdraw(uint256 assets) public view virtual override returns (uint256) {
-    (uint256 shares, ) = _previewWithdrawWithCost(assets);
-    return shares;
+  /// @notice ERC7540 - previewWithdraw MUST revert for async vaults
+  function previewWithdraw(
+    uint256 assets
+  ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
+    assets; // silence unused parameter warning
+    revert("ERC7540: previewWithdraw not supported for async vaults");
   }
 
   function _previewWithdrawWithCost(
@@ -679,10 +880,12 @@ contract GenesisVault is Initializable, GenesisManagedVault {
     return (shares, cost);
   }
 
-  /// @inheritdoc ERC4626Upgradeable
-  function previewRedeem(uint256 shares) public view virtual override returns (uint256) {
-    (uint256 assets, ) = _previewRedeemWithCost(shares);
-    return assets;
+  /// @notice ERC7540 - previewRedeem MUST revert for async vaults
+  function previewRedeem(
+    uint256 shares
+  ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
+    shares; // silence unused parameter warning
+    revert("ERC7540: previewRedeem not supported for async vaults");
   }
 
   function _previewRedeemWithCost(
@@ -702,47 +905,88 @@ contract GenesisVault is Initializable, GenesisManagedVault {
     return (assets, cost);
   }
 
+  /// @notice ERC7540 - maxDeposit returns max assets for requestDeposit
   /// @inheritdoc ERC4626Upgradeable
-  function maxDeposit(address receiver) public view virtual override returns (uint256) {
+  function maxDeposit(
+    address receiver
+  ) public view virtual override(GenesisManagedVault, IERC4626) returns (uint256) {
     if (paused() || isShutdown()) {
       return 0;
-    } else {
-      return super.maxDeposit(receiver);
     }
+
+    // ERC7540: Return max assets that can be requested for deposit
+    // This represents the maximum amount for requestDeposit, not immediate deposit
+    uint256 maxCapacity = _calculateMaxDepositRequest(receiver);
+    return maxCapacity;
   }
 
-  /// @inheritdoc ERC4626Upgradeable
-  function maxMint(address receiver) public view virtual override returns (uint256) {
-    if (paused() || isShutdown()) {
-      return 0;
-    } else {
-      return super.maxMint(receiver);
+  /// @notice Calculate maximum assets that can be requested for deposit
+  function _calculateMaxDepositRequest(address receiver) internal view returns (uint256) {
+    uint256 _userDepositLimit = userDepositLimit();
+    uint256 _vaultDepositLimit = vaultDepositLimit();
+
+    // If both limits are max, no restriction
+    if (_userDepositLimit == type(uint256).max && _vaultDepositLimit == type(uint256).max) {
+      return type(uint256).max;
     }
+
+    // Calculate user's current assets (including pending deposits)
+    uint256 userShares = balanceOf(receiver);
+    uint256 userCurrentAssets = _convertToAssets(userShares, Math.Rounding.Floor);
+
+    // Add any pending deposit assets for this user
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    uint256 userPendingAssets = $.pendingDepositAssets[receiver];
+    uint256 userTotalAssets = userCurrentAssets + userPendingAssets;
+
+    // Calculate available user limit
+    uint256 availableUserLimit = _userDepositLimit > userTotalAssets
+      ? _userDepositLimit - userTotalAssets
+      : 0;
+
+    // Calculate available vault limit
+    uint256 vaultCurrentAssets = totalAssets();
+    uint256 availableVaultLimit = _vaultDepositLimit > vaultCurrentAssets
+      ? _vaultDepositLimit - vaultCurrentAssets
+      : 0;
+
+    // Return the more restrictive limit
+    return availableUserLimit < availableVaultLimit ? availableUserLimit : availableVaultLimit;
   }
 
-  /// @dev This is limited by the idle assets.
-  ///
+  /// @notice ERC7540 - maxMint returns 0 since requestMint doesn't exist
   /// @inheritdoc ERC4626Upgradeable
-  function maxWithdraw(address owner) public view virtual override returns (uint256) {
+  function maxMint(
+    address /* receiver */
+  ) public view virtual override(GenesisManagedVault, IERC4626) returns (uint256) {
+    // ERC7540: mint() is deprecated and requestMint() doesn't exist
+    // Therefore, no shares can be minted directly
+    // Users should use requestDeposit() instead
+    return 0;
+  }
+
+  /// @notice ERC7540 - maxWithdraw returns claimable assets using Pure Pool calculation
+  /// @inheritdoc ERC4626Upgradeable
+  function maxWithdraw(
+    address controller
+  ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
     if (paused()) {
       return 0;
     }
-    uint256 assets = super.maxWithdraw(owner);
-    uint256 withdrawableAssets = idleAssets();
-    return assets > withdrawableAssets ? withdrawableAssets : assets;
+    // Pure Pool: Dynamic calculation of claimable assets
+    return _calculateClaimableRedeemAssets(controller);
   }
 
-  /// @dev This is limited by the idle assets.
-  ///
+  /// @notice ERC7540 - maxRedeem returns claimable shares using Pure Pool calculation
   /// @inheritdoc ERC4626Upgradeable
-  function maxRedeem(address owner) public view virtual override returns (uint256) {
+  function maxRedeem(
+    address controller
+  ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
     if (paused()) {
       return 0;
     }
-    uint256 shares = super.maxRedeem(owner);
-    // should be rounded floor so that the derived assets can't exceed idle
-    uint256 redeemableShares = _convertToShares(idleAssets(), Math.Rounding.Floor);
-    return shares > redeemableShares ? redeemableShares : shares;
+    // Pure Pool: Dynamic calculation of claimable shares
+    return _calculateClaimableRedeemShares(controller);
   }
 
   /// @dev If there are pending withdraw requests, the deposited assets is used to process them.
@@ -758,7 +1002,7 @@ contract GenesisVault is Initializable, GenesisManagedVault {
       revert ZeroShares();
     }
     super._deposit(caller, receiver, assets, shares);
-    processPendingWithdrawRequests();
+    // ERC7540: deposit processing is handled separately via processPendingDepositRequests()
 
     emit VaultState(totalAssets(), totalSupply());
   }
@@ -779,81 +1023,69 @@ contract GenesisVault is Initializable, GenesisManagedVault {
                         PRIVATE FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-  /// @dev Calculates the processed withdrawal assets.
-  ///
-  /// @param _idleAssets The idle assets available for processing withdraw requests.
-  /// @param _processedWithdrawAssets The value of processedWithdrawAssets storage variable.
-  /// @param _accRequestedWithdrawAssets The value of accRequestedWithdrawAssets storage variable.
-  ///
-  /// @return remainingAssets The remaining asset amount after processing
-  /// @return processedAssets The processed asset amount
-  function _calcProcessedAssets(
-    uint256 _idleAssets,
-    uint256 _processedWithdrawAssets,
-    uint256 _accRequestedWithdrawAssets
-  ) internal pure returns (uint256 remainingAssets, uint256 processedAssets) {
-    // check if there is neccessarity to process withdraw requests
-    if (_processedWithdrawAssets < _accRequestedWithdrawAssets) {
-      uint256 assetsToBeProcessed = _accRequestedWithdrawAssets - _processedWithdrawAssets;
-      if (assetsToBeProcessed > _idleAssets) {
-        processedAssets = _idleAssets;
-      } else {
-        processedAssets = assetsToBeProcessed;
-        remainingAssets = _idleAssets - processedAssets;
-      }
-    } else {
-      remainingAssets = _idleAssets;
+  /// @dev Calculate available capacity for processing deposit requests
+  function _calculateAvailableDepositCapacity() internal view returns (uint256) {
+    //  Consider vault deposit limit for processing capacity
+    uint256 _vaultDepositLimit = vaultDepositLimit();
+
+    // If vault limit is unlimited, no restriction on processing
+    if (_vaultDepositLimit == type(uint256).max) {
+      return type(uint256).max;
     }
-    return (remainingAssets, processedAssets);
+
+    // Calculate available vault capacity
+    uint256 currentVaultAssets = totalAssets();
+    if (currentVaultAssets >= _vaultDepositLimit) {
+      return 0; // Vault limit reached, no more processing
+    }
+
+    uint256 availableVaultCapacity = _vaultDepositLimit - currentVaultAssets;
+
+    // In the future, this could also be limited by:
+    // - Strategy capacity: strategy.getAvailableCapacity()
+    // - Daily processing limits
+    // - Liquidity constraints
+    // For now, only consider vault limit
+
+    return availableVaultCapacity;
   }
 
-  /// @dev Tells if the given withdraw request is last or not.
-  function _isLast(
-    bool isPrioritizedAccount,
-    uint256 accRequestedWithdrawAssetsOfRequest
-  ) internal view returns (bool isLast) {
-    // return false if withdraw request was not issued (accRequestedWithdrawAssetsOfRequest is zero)
-    if (accRequestedWithdrawAssetsOfRequest == 0) {
-      return false;
-    }
-    if (totalSupply() == 0) {
-      isLast = isPrioritizedAccount
-        ? accRequestedWithdrawAssetsOfRequest == prioritizedAccRequestedWithdrawAssets()
-        : accRequestedWithdrawAssetsOfRequest == accRequestedWithdrawAssets();
-    }
-    return isLast;
-  }
-
-  /// @dev Tells if the given withdraw request is executed or not.
-  function _isExecuted(
-    bool isLast,
-    bool isPrioritizedAccount,
-    uint256 accRequestedWithdrawAssetsOfRequest
-  ) internal view returns (bool isExecuted) {
-    // return false if withdraw request was not issued (accRequestedWithdrawAssetsOfRequest is zero)
-    if (accRequestedWithdrawAssetsOfRequest == 0) {
-      return false;
-    }
-    if (isLast) {
-      // last withdraw is claimable when utilized assets is 0
-      isExecuted = IGenesisStrategy(strategy()).utilizedAssets() == 0;
-    } else {
-      isExecuted = isPrioritizedAccount
-        ? accRequestedWithdrawAssetsOfRequest <= prioritizedProcessedWithdrawAssets()
-        : accRequestedWithdrawAssetsOfRequest <= processedWithdrawAssets();
-    }
-    return isExecuted;
-  }
-
-  /// @dev Uses nonce of the specified user and increase it
-  function _useNonce(address user) internal returns (uint256) {
+  /// @notice Pure Pool-based deposit processing - O(1) complexity
+  /// @dev No individual request iteration needed - uses proportional calculation
+  function _calculateClaimableDepositAssets(address controller) internal view returns (uint256) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    // For each vault, the nonce has an initial value of 0, can only be incremented by one, and cannot be
-    // decremented or reset. This guarantees that the nonce never overflows.
-    unchecked {
-      // It is important to do x++ and not ++x here.
-      return $.nonces[user]++;
-    }
+
+    uint256 pendingAssets = $.pendingDepositAssets[controller];
+    if (pendingAssets == 0) return 0;
+
+    //  Corrected Pure Pool Calculation
+    uint256 totalRequested = $.accRequestedDepositAssets;
+    uint256 totalProcessed = $.processedDepositAssets;
+    uint256 totalClaimed = $.claimedDepositAssets;
+
+    // Available for claiming = processed - already claimed
+    uint256 availableForClaim = totalProcessed - totalClaimed;
+    if (availableForClaim == 0) return 0;
+
+    // Total still pending = requested - claimed
+    uint256 totalPending = totalRequested - totalClaimed;
+    if (totalPending == 0) return 0;
+
+    // Proportional calculation:
+    // claimable = (user's pending × available for claim) / total pending
+    uint256 claimableAssets = (pendingAssets * availableForClaim) / totalPending;
+
+    return claimableAssets;
+  }
+
+  /// @dev Calculate pending redeem amount for a controller
+  function _calculatePendingRedeemForController(
+    address /* controller */
+  ) internal pure returns (uint256) {
+    // This is a simplified implementation
+    // In a real implementation, you would iterate through all withdraw requests
+    // and sum up the pending amounts for this controller
+    return 0; // TODO: Implement proper calculation
   }
 
   /// @dev Calculates the cost that should be added to an amount `assets` that does not include cost.
@@ -906,44 +1138,6 @@ contract GenesisVault is Initializable, GenesisManagedVault {
   /// @dev Denominated in 18 decimals.
   function exitCost() public view returns (uint256) {
     return GenesisVaultStorage.layout().exitCost;
-  }
-
-  /// @notice The underlying asset amount that is in Vault and
-  /// reserved to claim for the executed withdraw requests.
-  function assetsToClaim() public view returns (uint256) {
-    return GenesisVaultStorage.layout().assetsToClaim;
-  }
-
-  /// @dev The accumulated underlying asset amount requested to withdraw by the normal users.
-  function accRequestedWithdrawAssets() public view returns (uint256) {
-    return GenesisVaultStorage.layout().accRequestedWithdrawAssets;
-  }
-
-  /// @dev The accumulated underlying asset amount processed for the normal withdraw requests.
-  function processedWithdrawAssets() public view returns (uint256) {
-    return GenesisVaultStorage.layout().processedWithdrawAssets;
-  }
-
-  /// @dev The accumulated underlying asset amount requested to withdraw by the prioritized users.
-  function prioritizedAccRequestedWithdrawAssets() public view returns (uint256) {
-    return GenesisVaultStorage.layout().prioritizedAccRequestedWithdrawAssets;
-  }
-
-  /// @dev The accumulated underlying asset amount processed for the prioritized withdraw requests.
-  function prioritizedProcessedWithdrawAssets() public view returns (uint256) {
-    return GenesisVaultStorage.layout().prioritizedProcessedWithdrawAssets;
-  }
-
-  /// @dev Returns the state of a withdraw request for the withdrawKey.
-  function withdrawRequests(
-    bytes32 withdrawKey
-  ) public view returns (GenesisVaultStorage.WithdrawRequest memory) {
-    return GenesisVaultStorage.layout().withdrawRequests[withdrawKey];
-  }
-
-  /// @dev Returns a nonce of a user that are reserved to generate the next withdraw key.
-  function nonces(address user) public view returns (uint256) {
-    return GenesisVaultStorage.layout().nonces[user];
   }
 
   /// @notice The address of admin who is responsible for pausing/unpausing vault.
