@@ -6,7 +6,7 @@ import "../interfaces/IVaultManager.sol";
 import { WithdrawalRequest, Coupon, ForceWithdrawalRequest, CouponUsageDetail, Product } from "../types/Types.sol";
 
 library ClearingHouseStorage {
-  // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.clearinghouse")) - 1)) & ~bytes32(uint256(0xff));
+  // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.clearinghouse.secure")) - 1)) & ~bytes32(uint256(0xff));
   bytes32 internal constant SLOT =
     0x774c44a0b38ae921c4dec3ca94745bada9f891442f312f232ca295c24066bb00;
 

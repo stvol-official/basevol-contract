@@ -38,6 +38,12 @@ contract VaultManager is
   );
   event VaultClosed(address indexed product, address indexed vault, address indexed leader);
   event DebugLog(string message);
+  event VaultProfitShareUpdated(
+    address indexed product,
+    address indexed vault,
+    address indexed leader,
+    uint256 newProfitShare
+  );
 
   modifier onlyAdmin() {
     VaultManagerStorage.Layout storage $ = VaultManagerStorage.layout();
@@ -419,6 +425,26 @@ contract VaultManager is
     }
 
     return withdrawals;
+  }
+
+  function updateVaultProfitShare(
+    address product,
+    address vault,
+    address leader,
+    uint256 newProfitShare
+  ) external nonReentrant onlyOperator {
+    if (newProfitShare > BASE) revert InvalidAmount();
+
+    VaultManagerStorage.Layout storage $ = VaultManagerStorage.layout();
+    VaultInfo storage vaultInfo = $.vaults[product][vault];
+
+    if (vaultInfo.vault == address(0)) revert VaultNotFound();
+    if (vaultInfo.leader != leader) revert Unauthorized();
+    if (vaultInfo.closed) revert VaultAlreadyClosed();
+
+    vaultInfo.profitShare = newProfitShare;
+
+    emit VaultProfitShareUpdated(product, vault, leader, newProfitShare);
   }
 
   /* internal functions */
