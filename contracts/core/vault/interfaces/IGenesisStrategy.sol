@@ -70,6 +70,28 @@ interface IGenesisStrategy {
   function withdrawCompletedCallback(uint256 amount, bool success) external;
 
   /**
+   * @notice Callback function called when a Morpho deposit operation completes
+   * @param amount The amount that was deposited to Morpho
+   * @param success Whether the Morpho deposit operation was successful
+   */
+  function morphoDepositCompletedCallback(uint256 amount, bool success) external;
+
+  /**
+   * @notice Callback function called when a Morpho withdrawal operation completes
+   * @param amount The amount that was withdrawn from Morpho
+   * @param success Whether the Morpho withdrawal operation was successful
+   */
+  function morphoWithdrawCompletedCallback(uint256 amount, bool success) external;
+
+  /**
+   * @notice Callback function called when a Morpho redeem operation completes
+   * @param shares The amount of shares that were redeemed from Morpho
+   * @param assets The amount of assets received from Morpho
+   * @param success Whether the Morpho redeem operation was successful
+   */
+  function morphoRedeemCompletedCallback(uint256 shares, uint256 assets, bool success) external;
+
+  /**
    * @notice Returns the current balance of assets in the strategy
    * @return The current strategy balance
    */

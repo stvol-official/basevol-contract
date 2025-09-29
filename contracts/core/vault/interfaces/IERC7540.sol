@@ -91,32 +91,48 @@ interface IERC7540 is IERC4626, IERC165 {
     //////////////////////////////////////////////////////////////*/
 
   /**
-   * @notice Returns the amount of pending deposit assets for a controller
+   * @notice Returns the amount of requested assets in Pending state for the controller with the given requestId to deposit or mint
+   * @param requestId The ID of the request
    * @param controller The address to check
-   * @return The amount of pending deposit assets
+   * @return assets The amount of pending deposit assets
    */
-  function pendingDepositRequest(address controller) external view returns (uint256);
+  function pendingDepositRequest(
+    uint256 requestId,
+    address controller
+  ) external view returns (uint256 assets);
 
   /**
-   * @notice Returns the amount of claimable deposit assets for a controller
+   * @notice Returns the amount of requested assets in Claimable state for the controller with the given requestId to deposit or mint
+   * @param requestId The ID of the request
    * @param controller The address to check
-   * @return The amount of claimable deposit assets
+   * @return assets The amount of claimable deposit assets
    */
-  function claimableDepositRequest(address controller) external view returns (uint256);
+  function claimableDepositRequest(
+    uint256 requestId,
+    address controller
+  ) external view returns (uint256 assets);
 
   /**
-   * @notice Returns the amount of pending redemption shares for a controller
+   * @notice Returns the amount of requested shares in Pending state for the controller with the given requestId to redeem
+   * @param requestId The ID of the request
    * @param controller The address to check
-   * @return The amount of pending redemption shares
+   * @return shares The amount of pending redemption shares
    */
-  function pendingRedeemRequest(address controller) external view returns (uint256);
+  function pendingRedeemRequest(
+    uint256 requestId,
+    address controller
+  ) external view returns (uint256 shares);
 
   /**
-   * @notice Returns the amount of claimable redemption shares for a controller
+   * @notice Returns the amount of requested shares in Claimable state for the controller with the given requestId to redeem
+   * @param requestId The ID of the request
    * @param controller The address to check
-   * @return The amount of claimable redemption shares
+   * @return shares The amount of claimable redemption shares
    */
-  function claimableRedeemRequest(address controller) external view returns (uint256);
+  function claimableRedeemRequest(
+    uint256 requestId,
+    address controller
+  ) external view returns (uint256 shares);
 
   /*//////////////////////////////////////////////////////////////
                             OPERATOR METHODS

@@ -39,4 +39,7 @@ interface IGenesisVaultErrors {
 
   /// @notice Management fee transfer not allowed
   error ManagementFeeTransfer(address feeRecipient);
+
+  /// @notice BaseVol contract not set
+  error BaseVolContractNotSet();
 }

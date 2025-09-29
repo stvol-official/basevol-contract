@@ -18,6 +18,11 @@ import { IGenesisVaultErrors } from "./errors/GenesisVaultErrors.sol";
 import { IGenesisStrategy } from "./interfaces/IGenesisStrategy.sol";
 import { IERC7540 } from "./interfaces/IERC7540.sol";
 
+// Interface for BaseVol contract
+interface IBaseVol {
+  function currentEpoch() external view returns (uint256);
+}
+
 contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   using Math for uint256;
   using SafeERC20 for IERC20;
@@ -36,6 +41,35 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   event PrioritizedAccountAdded(address indexed account);
   event PrioritizedAccountRemoved(address indexed account);
 
+  // Epoch-based events
+  event EpochSettled(uint256 indexed epoch, uint256 sharePrice);
+  event DepositFromEpoch(
+    address indexed controller,
+    address indexed receiver,
+    uint256 indexed epoch,
+    uint256 assets,
+    uint256 shares,
+    uint256 sharePrice
+  );
+  event RedeemFromEpoch(
+    address indexed controller,
+    address indexed receiver,
+    uint256 indexed epoch,
+    uint256 shares,
+    uint256 assets,
+    uint256 sharePrice
+  );
+  event BatchDeposit(
+    address indexed controller,
+    address indexed receiver,
+    uint256[] epochs,
+    uint256[] amounts,
+    uint256 totalShares
+  );
+
+  // Fee-related events
+  event FeesWithdrawn(address indexed to, uint256 amount);
+
   // ERC7540 Events (use OpenZeppelin's Withdraw/Redeem events)
 
   modifier onlyAdmin() {
@@ -46,6 +80,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   }
 
   function initialize(
+    address baseVolContract_,
     address asset_,
     uint256 entryCost_,
     uint256 exitCost_,
@@ -58,6 +93,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     _setEntryCost(entryCost_);
     _setExitCost(exitCost_);
+
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    $.baseVolContract = baseVolContract_;
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -71,6 +109,61 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
       interfaceId == type(IERC4626).interfaceId ||
       interfaceId == type(IERC20).interfaceId ||
       interfaceId == type(IERC165).interfaceId;
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                        BASEVOL INTEGRATION FUNCTIONS   
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice Get current epoch from BaseVol system in real-time
+  function getCurrentEpoch() public view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    address baseVolContract = $.baseVolContract;
+
+    // If BaseVol contract is not set, fallback to stored epoch
+    if (baseVolContract == address(0)) {
+      revert BaseVolContractNotSet();
+    }
+
+    // Call BaseVol contract to get real-time current epoch
+    try IBaseVol(baseVolContract).currentEpoch() returns (uint256 currentEpoch) {
+      return currentEpoch;
+    } catch {
+      return 0;
+    }
+  }
+
+  /// @notice Called by BaseVol contract when an epoch is settled
+  /// @param epoch The epoch number that was settled
+  /// @param sharePrice The final share price for this epoch (in 1e18 precision)
+  function onEpochSettled(uint256 epoch, uint256 sharePrice) external {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    require(msg.sender == $.baseVolContract, "GenesisVault: unauthorized");
+
+    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+    epochData.sharePrice = sharePrice;
+    epochData.isSettled = true;
+    epochData.settlementTimestamp = block.timestamp;
+
+    // Process redemptions first (priority)
+    if (epochData.totalRequestedRedeemShares > 0) {
+      epochData.processedRedeemShares = epochData.totalRequestedRedeemShares;
+      epochData.redeemsProcessed = true;
+    }
+
+    // Then process deposits
+    if (epochData.totalRequestedDepositAssets > 0) {
+      epochData.processedDepositAssets = epochData.totalRequestedDepositAssets;
+      epochData.depositsProcessed = true;
+    }
+
+    emit EpochSettled(epoch, sharePrice);
+  }
+
+  /// @notice Set BaseVol contract address (only owner)
+  function setBaseVolContract(address _baseVolContract) external onlyOwner {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    $.baseVolContract = _baseVolContract;
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -213,6 +306,25 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     _harvestPerformanceFeeShares();
   }
 
+  /// @notice Withdraw accumulated fees (only owner)
+  /// @param to Address to receive the fees
+  /// @param amount Amount of fees to withdraw (0 = all)
+  function withdrawFees(address to, uint256 amount) external onlyOwner {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+
+    uint256 availableFees = $.accumulatedFees;
+    require(availableFees > 0, "GenesisVault: no fees available");
+    require(to != address(0), "GenesisVault: invalid recipient");
+
+    uint256 withdrawAmount = amount == 0 ? availableFees : amount;
+    require(withdrawAmount <= availableFees, "GenesisVault: insufficient fees");
+
+    $.accumulatedFees -= withdrawAmount;
+    IERC20(asset()).safeTransfer(to, withdrawAmount);
+
+    emit FeesWithdrawn(to, withdrawAmount);
+  }
+
   /*//////////////////////////////////////////////////////////////
                           ERC7540 OPERATOR SYSTEM
     //////////////////////////////////////////////////////////////*/
@@ -276,56 +388,98 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     IERC20(asset()).safeTransferFrom(owner, address(this), assets);
 
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    requestId = $.nextRequestId++;
 
-    $.depositRequests[requestId] = GenesisVaultStorage.DepositRequest({
-      assets: assets,
-      controller: controller,
-      owner: owner,
-      timestamp: block.timestamp,
-      isClaimed: false
-    });
+    // Apply entry cost - only the net amount after fee goes to investment
+    uint256 entryCostAmount = _costOnTotal(assets, entryCost());
+    uint256 netAssets = assets - entryCostAmount;
 
-    $.pendingDepositAssets[controller] += assets;
-    $.accRequestedDepositAssets += assets;
+    // Track accumulated fees
+    $.accumulatedFees += entryCostAmount;
+
+    // Get current epoch from BaseVol system
+    uint256 currentEpoch = getCurrentEpoch();
+
+    // ERC7540: Use epoch as requestId for fungibility and simplicity
+    requestId = currentEpoch;
+
+    // Update epoch-based tracking with net assets (after fee)
+    $.userEpochDepositAssets[controller][currentEpoch] += netAssets;
+    $.epochData[currentEpoch].totalRequestedDepositAssets += netAssets;
+
+    // Add to user's epoch list (avoid duplicates)
+    if ($.userEpochDepositAssets[controller][currentEpoch] == netAssets) {
+      $.userDepositEpochs[controller].push(currentEpoch);
+    }
 
     emit DepositRequest(controller, owner, requestId, _msgSender(), assets);
-
-    // Auto-process if possible
-    processPendingDepositRequests();
 
     return requestId;
   }
 
-  /// @notice Process pending deposit requests with available capacity - Pure Pool O(1)
+  /// @notice Process deposit requests for a specific epoch - Epoch-based O(1)
+  /// @param epoch The epoch to process deposits for
   /// @return The assets processed into claimable state
-  function processPendingDepositRequests() public returns (uint256) {
+  function processEpochDepositRequests(uint256 epoch) public returns (uint256) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
 
-    uint256 availableCapacity = _calculateAvailableDepositCapacity();
-    if (availableCapacity == 0) return 0;
+    require(epochData.isSettled, "GenesisVault: epoch not settled");
 
-    uint256 pendingAssets = $.accRequestedDepositAssets - $.processedDepositAssets;
-    uint256 assetsToProcess = Math.min(availableCapacity, pendingAssets);
-
-    if (assetsToProcess > 0) {
-      $.processedDepositAssets += assetsToProcess;
-      // Pure Pool: No individual request processing needed!
-      // Claimable amounts are calculated dynamically in _calculateClaimableDepositAssets
+    if (epochData.totalRequestedDepositAssets > 0 && !epochData.depositsProcessed) {
+      epochData.processedDepositAssets = epochData.totalRequestedDepositAssets;
+      epochData.depositsProcessed = true;
+      return epochData.totalRequestedDepositAssets;
     }
 
-    return assetsToProcess;
+    return 0;
   }
 
-  /// @notice Returns the amount of pending deposit assets for a controller
-  function pendingDepositRequest(address controller) external view override returns (uint256) {
-    return GenesisVaultStorage.layout().pendingDepositAssets[controller];
+  /// @notice Returns the amount of requested assets in Pending state for the controller with the given requestId to deposit or mint
+  /// @param requestId The ID of the request
+  /// @param controller The address to check
+  /// @return assets The amount of pending deposit assets
+  function pendingDepositRequest(
+    uint256 requestId,
+    address controller
+  ) external view override returns (uint256 assets) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+
+    // ERC7540: requestId is epoch in our implementation
+    uint256 epoch = requestId;
+
+    // MUST NOT include any assets in Claimable state for deposit
+    // Check if the epoch is settled and deposits are processed (i.e., claimable)
+    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+    if (epochData.isSettled && epochData.depositsProcessed) {
+      return 0; // Assets are in claimable state, not pending
+    }
+
+    // Return the pending assets for this controller in this epoch
+    return $.userEpochDepositAssets[controller][epoch];
   }
 
-  /// @notice Returns the amount of claimable deposit assets for a controller
-  /// @dev Pure Pool: Calculates claimable assets dynamically using proportional shares
-  function claimableDepositRequest(address controller) external view override returns (uint256) {
-    return _calculateClaimableDepositAssets(controller);
+  /// @notice Returns the amount of requested assets in Claimable state for the controller with the given requestId to deposit or mint
+  /// @param requestId The ID of the request (epoch number in our implementation)
+  /// @param controller The address to check
+  /// @return assets The amount of claimable deposit assets
+  function claimableDepositRequest(
+    uint256 requestId,
+    address controller
+  ) external view override returns (uint256 assets) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+
+    // ERC7540: requestId is epoch in our implementation
+    uint256 epoch = requestId;
+
+    // MUST NOT include any assets in Pending state for deposit
+    // Check if the epoch is settled and deposits are processed (i.e., claimable)
+    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+    if (!epochData.isSettled || !epochData.depositsProcessed) {
+      return 0; // Assets are still in pending state, not claimable
+    }
+
+    // Calculate claimable assets for this specific epoch
+    return _calculateClaimableForEpoch(controller, epoch, true);
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -360,14 +514,14 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     return maxDeposit(owner);
   }
 
-  /// @notice ERC7540 - Returns max shares for immediate withdraw (claimable only)
+  /// @notice ERC7540 - Returns max assets for immediate withdraw (claimable only) using Epoch-based calculation
   function maxClaimableWithdraw(address controller) public view returns (uint256) {
-    return _calculateClaimableRedeemAssets(controller);
+    return _calculateClaimableRedeemAssetsAcrossEpochs(controller);
   }
 
-  /// @notice ERC7540 - Returns max shares for immediate redeem (claimable only)
+  /// @notice ERC7540 - Returns max shares for immediate redeem (claimable only) using Epoch-based calculation
   function maxClaimableRedeem(address controller) public view returns (uint256) {
-    return _calculateClaimableRedeemShares(controller);
+    return _calculateClaimableRedeemSharesAcrossEpochs(controller);
   }
 
   function _setEntryCost(uint256 value) internal {
@@ -409,145 +563,96 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     }
     _burn(owner, shares);
 
-    // 2. Check priority status
+    // Check priority status
     bool isPrioritizedAccount = isPrioritized(owner);
 
-    // 3. Create request
+    // Create request
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    requestId = $.nextRequestId++;
 
-    uint256 assets = _convertToAssets(shares, Math.Rounding.Floor);
+    // Get current epoch from BaseVol system
+    uint256 currentEpoch = getCurrentEpoch();
 
-    $.redeemRequests[requestId] = GenesisVaultStorage.RedeemRequest({
-      shares: shares,
-      assets: assets,
-      controller: controller,
-      owner: owner,
-      timestamp: block.timestamp,
-      isPrioritized: isPrioritizedAccount,
-      isProcessed: false
-    });
+    // ERC7540: Use epoch as requestId for fungibility and simplicity
+    requestId = currentEpoch;
 
-    // 4. Update priority-based state
-    if (isPrioritizedAccount) {
-      $.prioritizedAccRequestedRedeemAssets += assets;
-    } else {
-      $.accRequestedRedeemAssets += assets;
+    // Update epoch-based tracking
+    $.userEpochRedeemShares[controller][currentEpoch] += shares;
+    $.epochData[currentEpoch].totalRequestedRedeemShares += shares;
+
+    // Add to user's epoch list (avoid duplicates)
+    if ($.userEpochRedeemShares[controller][currentEpoch] == shares) {
+      $.userRedeemEpochs[controller].push(currentEpoch);
     }
 
-    // 5. Update pending state
-    $.pendingRedeemShares[controller] += shares;
-    $.pendingRedeemAssets[controller] += assets;
-
     emit RedeemRequest(controller, owner, requestId, _msgSender(), shares);
-
-    // 6. Attempt automatic processing
-    processRedeemRequests();
 
     return requestId;
   }
 
-  /// @notice Pure Pool-based redeem processing - O(1) complexity
-  /// @dev Processes pending redemptions using pure pool mathematics without individual request iteration
-  function processRedeemRequests() public returns (uint256) {
+  /// @notice Process redeem requests for a specific epoch - Epoch-based O(1)
+  /// @param epoch The epoch to process redemptions for
+  /// @return The shares processed into claimable state
+  function processEpochRedeemRequests(uint256 epoch) public returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+    require(epochData.isSettled, "GenesisVault: epoch not settled");
+
+    if (epochData.totalRequestedRedeemShares > 0 && !epochData.redeemsProcessed) {
+      epochData.processedRedeemShares = epochData.totalRequestedRedeemShares;
+      epochData.redeemsProcessed = true;
+      return epochData.totalRequestedRedeemShares;
+    }
+
+    return 0;
+  }
+
+  /// @notice Returns the amount of requested shares in Pending state for the controller with the given requestId to redeem
+  /// @param requestId The ID of the request (epoch number in our implementation)
+  /// @param controller The address to check
+  /// @return shares The amount of pending redemption shares
+  function pendingRedeemRequest(
+    uint256 requestId,
+    address controller
+  ) external view override returns (uint256 shares) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    uint256 _idleAssets = idleAssets();
-    if (_idleAssets == 0) return 0;
+    // ERC7540: requestId is epoch in our implementation
+    uint256 epoch = requestId;
 
-    uint256 totalProcessed = 0;
-
-    // O(1) Priority Pool Processing
-    uint256 priorityPending = $.prioritizedAccRequestedRedeemAssets -
-      $.prioritizedProcessedRedeemAssets;
-    uint256 priorityToProcess = Math.min(_idleAssets, priorityPending);
-
-    if (priorityToProcess > 0) {
-      $.prioritizedProcessedRedeemAssets += priorityToProcess;
-      totalProcessed += priorityToProcess;
-      _idleAssets -= priorityToProcess;
-
-      // Pure pool: No individual request iteration needed
-      // All controllers with priority requests become proportionally claimable
+    // MUST NOT include any shares in Claimable state for redeem
+    // Check if the epoch is settled and redeems are processed (i.e., claimable)
+    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+    if (epochData.isSettled && epochData.redeemsProcessed) {
+      return 0; // Shares are in claimable state, not pending
     }
 
-    //  O(1) Normal Pool Processing
-    uint256 normalPending = $.accRequestedRedeemAssets - $.processedRedeemAssets;
-    uint256 normalToProcess = Math.min(_idleAssets, normalPending);
-
-    if (normalToProcess > 0) {
-      $.processedRedeemAssets += normalToProcess;
-      totalProcessed += normalToProcess;
-
-      // Pure pool: No individual request iteration needed
-      // All controllers with normal requests become proportionally claimable
-    }
-
-    //  In pure pool system, individual request processing is eliminated
-    // Controllers can claim their proportional share based on:
-    // - Their pending amounts
-    // - Total processed amounts for their priority group
-    // - Current pool ratios
-
-    return totalProcessed;
+    // Return the pending shares for this controller in this epoch
+    return $.userEpochRedeemShares[controller][epoch];
   }
 
-  /// @notice Returns the amount of pending redemption shares for a controller
-  function pendingRedeemRequest(address controller) external view override returns (uint256) {
-    return GenesisVaultStorage.layout().pendingRedeemShares[controller];
-  }
-
-  /// @notice Returns the amount of claimable redemption shares for a controller
-  /// @dev Pure Pool calculation - computed dynamically based on proportional share
-  function claimableRedeemRequest(address controller) external view override returns (uint256) {
-    return _calculateClaimableRedeemShares(controller);
-  }
-
-  /// @notice Calculate claimable redeem shares dynamically using pure pool mathematics
-  function _calculateClaimableRedeemShares(address controller) internal view returns (uint256) {
+  /// @notice Returns the amount of requested shares in Claimable state for the controller with the given requestId to redeem
+  /// @param requestId The ID of the request (epoch number in our implementation)
+  /// @param controller The address to check
+  /// @return shares The amount of claimable redemption shares
+  function claimableRedeemRequest(
+    uint256 requestId,
+    address controller
+  ) external view override returns (uint256 shares) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    uint256 pendingShares = $.pendingRedeemShares[controller];
-    if (pendingShares == 0) return 0;
+    // ERC7540: requestId is epoch in our implementation
+    uint256 epoch = requestId;
 
-    //  Corrected Pure Pool Calculation
-    bool isPriority = isPrioritized(controller);
-
-    if (isPriority) {
-      uint256 totalPriorityRequested = $.prioritizedAccRequestedRedeemAssets;
-      uint256 totalPriorityProcessed = $.prioritizedProcessedRedeemAssets;
-      uint256 totalPriorityClaimed = $.prioritizedClaimedRedeemAssets;
-
-      // Available for claiming = processed - already claimed
-      uint256 availableForClaim = totalPriorityProcessed - totalPriorityClaimed;
-      if (availableForClaim == 0) return 0;
-
-      // Total still pending = requested - claimed
-      uint256 totalPending = totalPriorityRequested - totalPriorityClaimed;
-      if (totalPending == 0) return 0;
-
-      // Proportional calculation
-      uint256 pendingAssets = $.pendingRedeemAssets[controller];
-      uint256 claimableAssets = (pendingAssets * availableForClaim) / totalPending;
-      return _convertToShares(claimableAssets, Math.Rounding.Floor);
-    } else {
-      uint256 totalNormalRequested = $.accRequestedRedeemAssets;
-      uint256 totalNormalProcessed = $.processedRedeemAssets;
-      uint256 totalNormalClaimed = $.claimedRedeemAssets;
-
-      // Available for claiming = processed - already claimed
-      uint256 availableForClaim = totalNormalProcessed - totalNormalClaimed;
-      if (availableForClaim == 0) return 0;
-
-      // Total still pending = requested - claimed
-      uint256 totalPending = totalNormalRequested - totalNormalClaimed;
-      if (totalPending == 0) return 0;
-
-      // Proportional calculation
-      uint256 pendingAssets = $.pendingRedeemAssets[controller];
-      uint256 claimableAssets = (pendingAssets * availableForClaim) / totalPending;
-      return _convertToShares(claimableAssets, Math.Rounding.Floor);
+    // MUST NOT include any shares in Pending state for redeem
+    // Check if the epoch is settled and redeems are processed (i.e., claimable)
+    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+    if (!epochData.isSettled || !epochData.redeemsProcessed) {
+      return 0; // Shares are still in pending state, not claimable
     }
+
+    // Calculate claimable shares for this specific epoch
+    return _calculateClaimableForEpoch(controller, epoch, false);
   }
 
   /// @notice Tells if the owner is prioritized to withdraw.
@@ -562,35 +667,150 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   }
 
   /// @notice The underlying asset amount in this vault that is free to withdraw or utilize.
-  /// @dev ERC7540: Returns the vault's asset balance as idle assets since claims are immediate
+  /// @dev Excludes accumulated fees which are reserved for withdrawal by owner
   function idleAssets() public view returns (uint256) {
-    //  ERC7540 Pure Pool System:
-    // - Deposit requests: Assets are held in vault until processed into shares
-    // - Redeem requests: Once processed, assets are immediately available for claiming
-    // - When users call withdraw/redeem, assets are immediately transferred out
-    // - No assets are "reserved" or locked in the vault
-    //
-    // Therefore, all assets in the vault are considered "idle" and available
-    // for utilization by the strategy or processing new requests.
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    uint256 totalBalance = IERC20(asset()).balanceOf(address(this));
+    uint256 fees = $.accumulatedFees;
 
-    return IERC20(asset()).balanceOf(address(this));
+    // Return total balance minus accumulated fees
+    return totalBalance > fees ? totalBalance - fees : 0;
   }
 
-  /// @notice ERC7540 - Returns total pending redeem assets (prioritized + normal)
+  /// @notice ERC7540 - Returns total pending redeem assets across all unsettled epochs
   function totalPendingWithdraw() public view returns (uint256) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    return
-      $.prioritizedAccRequestedRedeemAssets +
-      $.accRequestedRedeemAssets -
-      $.prioritizedProcessedRedeemAssets -
-      $.processedRedeemAssets;
+    uint256 totalPending = 0;
+
+    // Sum up pending withdrawals across all users and epochs
+    // Note: This is an approximation for compatibility. In practice,
+    // we should track this more efficiently or calculate it differently.
+    uint256 currentEpoch = getCurrentEpoch();
+
+    // Check recent epochs (last 10) for pending redemptions
+    for (uint256 i = 0; i < 10 && currentEpoch >= i; i++) {
+      uint256 epoch = currentEpoch - i;
+      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+      if (!epochData.isSettled && epochData.totalRequestedRedeemShares > 0) {
+        // Convert shares to approximate assets using current share price
+        totalPending += _convertToAssets(epochData.totalRequestedRedeemShares, Math.Rounding.Floor);
+      }
+    }
+
+    return totalPending;
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                        EPOCH-SPECIFIC FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice Deposit from a specific epoch using epoch-specific share price
+  /// @param epoch The epoch to claim from
+  /// @param assets The amount of assets to claim
+  /// @param receiver The address to receive the shares
+  /// @param controller The address that controls the request
+  /// @return shares The amount of shares minted
+  function depositFromEpoch(
+    uint256 epoch,
+    uint256 assets,
+    address receiver,
+    address controller
+  ) external onlyControllerOrOperator(controller) returns (uint256 shares) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+    require(epochData.isSettled && epochData.depositsProcessed, "GenesisVault: epoch not ready");
+
+    // Calculate claimable assets for this specific epoch
+    uint256 claimableAssets = _calculateClaimableForEpoch(controller, epoch, true);
+    require(claimableAssets >= assets, "GenesisVault: insufficient claimable assets");
+
+    // Use epoch-specific share price
+    shares = (assets * 1e18) / epochData.sharePrice;
+
+    // Update global claimed amount
+    epochData.claimedDepositAssets += assets;
+
+    // Update user-specific claimed amount
+    $.userEpochClaimedDepositAssets[controller][epoch] += assets;
+
+    _mint(receiver, shares);
+    emit DepositFromEpoch(controller, receiver, epoch, assets, shares, epochData.sharePrice);
+    return shares;
+  }
+
+  /// @notice Redeem from a specific epoch using epoch-specific share price
+  /// @param epoch The epoch to claim from
+  /// @param shares The amount of shares to redeem
+  /// @param receiver The address to receive the assets
+  /// @param controller The address that controls the request
+  /// @return assets The amount of assets transferred
+  function redeemFromEpoch(
+    uint256 epoch,
+    uint256 shares,
+    address receiver,
+    address controller
+  ) external onlyControllerOrOperator(controller) returns (uint256 assets) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+    require(epochData.isSettled && epochData.redeemsProcessed, "GenesisVault: epoch not ready");
+
+    // Calculate claimable shares for this specific epoch
+    uint256 claimableShares = _calculateClaimableForEpoch(controller, epoch, false);
+    require(claimableShares >= shares, "GenesisVault: insufficient claimable shares");
+
+    // Use epoch-specific share price
+    uint256 grossAssets = (shares * epochData.sharePrice) / 1e18;
+
+    // Apply exit cost - user receives net amount after fee deduction
+    uint256 exitCostAmount = _costOnTotal(grossAssets, exitCost());
+    assets = grossAssets - exitCostAmount;
+
+    // Track accumulated fees
+    $.accumulatedFees += exitCostAmount;
+
+    // Update global claimed amount
+    epochData.claimedRedeemShares += shares;
+
+    // Update user-specific claimed amount
+    $.userEpochClaimedRedeemShares[controller][epoch] += shares;
+
+    IERC20(asset()).safeTransfer(receiver, assets);
+    emit RedeemFromEpoch(controller, receiver, epoch, shares, assets, epochData.sharePrice);
+    return assets;
+  }
+
+  /// @notice Batch deposit from multiple epochs
+  /// @param epochs Array of epochs to claim from
+  /// @param amounts Array of asset amounts to claim from each epoch
+  /// @param receiver The address to receive the shares
+  /// @param controller The address that controls the requests
+  /// @return totalShares The total amount of shares minted
+  function batchDepositFromEpochs(
+    uint256[] calldata epochs,
+    uint256[] calldata amounts,
+    address receiver,
+    address controller
+  ) external onlyControllerOrOperator(controller) returns (uint256 totalShares) {
+    require(epochs.length == amounts.length, "GenesisVault: array length mismatch");
+
+    for (uint256 i = 0; i < epochs.length; i++) {
+      if (amounts[i] > 0) {
+        totalShares += this.depositFromEpoch(epochs[i], amounts[i], receiver, controller);
+      }
+    }
+
+    emit BatchDeposit(controller, receiver, epochs, amounts, totalShares);
+    return totalShares;
   }
 
   /*//////////////////////////////////////////////////////////////
                              ERC7540 CLAIM FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-  /// @notice ERC7540 deposit (claim from async request) - Pure Pool O(1)
+  /// @notice ERC7540 deposit (claim from async request) - Epoch-based with automatic FIFO processing
   /// @param assets The amount of assets to claim
   /// @param receiver The address to receive the shares
   /// @param controller The address that controls the request
@@ -602,25 +822,48 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   ) external onlyControllerOrOperator(controller) returns (uint256 shares) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    //  Pure Pool: Dynamic claimable calculation
-    uint256 claimableAssets = _calculateClaimableDepositAssets(controller);
-    require(claimableAssets >= assets, "GenesisVault: insufficient claimable assets");
+    // Epoch-based: Calculate total claimable across all epochs
+    uint256 totalClaimable = _calculateClaimableDepositAssetsAcrossEpochs(controller);
+    require(totalClaimable >= assets, "GenesisVault: insufficient claimable assets");
 
-    //  Pure Pool: Update pending and claimed amounts correctly
-    $.pendingDepositAssets[controller] -= assets;
-    $.claimedDepositAssets += assets;
+    // Process claims from oldest to newest epochs (FIFO)
+    uint256 remainingAssets = assets;
+    uint256 totalShares = 0;
 
-    // Convert assets to shares and mint (assets are already in vault)
-    shares = _convertToShares(assets, Math.Rounding.Floor);
+    uint256[] memory userEpochs = $.userDepositEpochs[controller];
+    for (uint256 i = 0; i < userEpochs.length && remainingAssets > 0; i++) {
+      uint256 epoch = userEpochs[i];
+      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+      if (!epochData.isSettled || !epochData.depositsProcessed) continue;
+
+      uint256 claimableAssets = _calculateClaimableForEpoch(controller, epoch, true);
+      uint256 assetsToProcess = Math.min(remainingAssets, claimableAssets);
+
+      if (assetsToProcess > 0) {
+        // Use epoch-specific share price
+        uint256 epochShares = (assetsToProcess * 1e18) / epochData.sharePrice;
+        totalShares += epochShares;
+
+        // Update global claimed amount
+        epochData.claimedDepositAssets += assetsToProcess;
+
+        // Update user-specific claimed amount
+        $.userEpochClaimedDepositAssets[controller][epoch] += assetsToProcess;
+
+        remainingAssets -= assetsToProcess;
+      }
+    }
+
+    shares = totalShares;
     _mint(receiver, shares);
 
-    //  ERC7540: Emit Deposit event with controller as first parameter
     emit Deposit(controller, receiver, assets, shares);
     emit VaultState(totalAssets(), totalSupply());
     return shares;
   }
 
-  /// @notice ERC7540 mint (claim from async request) - Pure Pool O(1)
+  /// @notice ERC7540 mint (claim from async request) - Epoch-based with automatic FIFO processing
   /// @param shares The amount of shares to claim
   /// @param receiver The address to receive the shares
   /// @param controller The address that controls the request
@@ -632,26 +875,50 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   ) external onlyControllerOrOperator(controller) returns (uint256 assets) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    assets = _convertToAssets(shares, Math.Rounding.Ceil);
+    // Process claims from oldest to newest epochs to get the required shares
+    uint256 remainingShares = shares;
+    uint256 totalAssetsUsed = 0;
 
-    //  Pure Pool: Dynamic claimable calculation
-    uint256 claimableAssets = _calculateClaimableDepositAssets(controller);
-    require(claimableAssets >= assets, "GenesisVault: insufficient claimable assets");
+    uint256[] memory userEpochs = $.userDepositEpochs[controller];
+    for (uint256 i = 0; i < userEpochs.length && remainingShares > 0; i++) {
+      uint256 epoch = userEpochs[i];
+      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
 
-    //  Pure Pool: Update pending and claimed amounts correctly
-    $.pendingDepositAssets[controller] -= assets;
-    $.claimedDepositAssets += assets;
+      if (!epochData.isSettled || !epochData.depositsProcessed) continue;
 
-    // Mint shares (assets are already in vault)
+      uint256 claimableAssets = _calculateClaimableForEpoch(controller, epoch, true);
+      if (claimableAssets == 0) continue;
+
+      // Calculate how many shares we can get from this epoch
+      uint256 epochShares = (claimableAssets * 1e18) / epochData.sharePrice;
+      uint256 sharesToProcess = Math.min(remainingShares, epochShares);
+
+      if (sharesToProcess > 0) {
+        // Calculate assets needed for these shares using epoch-specific price
+        uint256 assetsNeeded = (sharesToProcess * epochData.sharePrice) / 1e18;
+        totalAssetsUsed += assetsNeeded;
+
+        // Update global claimed amount
+        epochData.claimedDepositAssets += assetsNeeded;
+
+        // Update user-specific claimed amount
+        $.userEpochClaimedDepositAssets[controller][epoch] += assetsNeeded;
+
+        remainingShares -= sharesToProcess;
+      }
+    }
+
+    require(remainingShares == 0, "GenesisVault: insufficient claimable for shares");
+
+    assets = totalAssetsUsed;
     _mint(receiver, shares);
 
-    //  ERC7540: Emit Deposit event with controller as first parameter
     emit Deposit(controller, receiver, assets, shares);
     emit VaultState(totalAssets(), totalSupply());
     return assets;
   }
 
-  /// @notice ERC7540 withdraw with Pure Pool calculation
+  /// @notice ERC7540 withdraw with Epoch-based calculation
   function withdraw(
     uint256 assets,
     address receiver,
@@ -666,74 +933,63 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    // 1. Pure Pool: Calculate claimable assets dynamically
-    uint256 claimableAssets = _calculateClaimableRedeemAssets(controller);
-    require(claimableAssets >= assets, "GenesisVault: insufficient claimable assets");
-
-    // 2. Calculate shares
-    shares = _convertToShares(assets, Math.Rounding.Ceil);
-
-    // 3. Pure Pool: Deduct directly from pending amounts
-    $.pendingRedeemAssets[controller] -= assets;
-    $.pendingRedeemShares[controller] -= shares;
-
-    // 4. Update pool state (adjust processed amounts)
-    bool isPriority = isPrioritized(controller);
-    if (isPriority) {
-      $.prioritizedProcessedRedeemAssets -= assets;
+    // Calculate gross assets needed to get desired net assets after exit cost
+    // net = gross - (gross * exitCost / 1e18)
+    // net = gross * (1 - exitCost / 1e18)
+    // gross = net / (1 - exitCost / 1e18)
+    uint256 exitCostRate = exitCost();
+    uint256 grossAssetsNeeded;
+    if (exitCostRate > 0) {
+      grossAssetsNeeded = (assets * 1e18) / (1e18 - exitCostRate);
     } else {
-      $.processedRedeemAssets -= assets;
+      grossAssetsNeeded = assets;
     }
 
-    // 5. Transfer assets
+    // Epoch-based: Calculate total claimable across all epochs
+    uint256 totalClaimable = _calculateClaimableRedeemAssetsAcrossEpochs(controller);
+    require(totalClaimable >= grossAssetsNeeded, "GenesisVault: insufficient claimable assets");
+
+    // Process claims from oldest to newest epochs (FIFO)
+    uint256 remainingGrossAssets = grossAssetsNeeded;
+    uint256 totalShares = 0;
+
+    uint256[] memory userEpochs = $.userRedeemEpochs[controller];
+    for (uint256 i = 0; i < userEpochs.length && remainingGrossAssets > 0; i++) {
+      uint256 epoch = userEpochs[i];
+      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+      if (!epochData.isSettled || !epochData.redeemsProcessed) continue;
+
+      uint256 claimableShares = _calculateClaimableForEpoch(controller, epoch, false);
+      if (claimableShares == 0) continue;
+
+      // Calculate assets available from this epoch
+      uint256 epochAssets = (claimableShares * epochData.sharePrice) / 1e18;
+      uint256 assetsToProcess = Math.min(remainingGrossAssets, epochAssets);
+
+      if (assetsToProcess > 0) {
+        // Calculate shares needed using epoch-specific share price
+        uint256 epochSharesNeeded = (assetsToProcess * 1e18) / epochData.sharePrice;
+        totalShares += epochSharesNeeded;
+
+        // Update global claimed amount
+        epochData.claimedRedeemShares += epochSharesNeeded;
+
+        // Update user-specific claimed amount
+        $.userEpochClaimedRedeemShares[controller][epoch] += epochSharesNeeded;
+
+        remainingGrossAssets -= assetsToProcess;
+      }
+    }
+
+    shares = totalShares;
     IERC20(asset()).safeTransfer(receiver, assets);
 
     emit Withdraw(_msgSender(), receiver, controller, assets, shares);
     return shares;
   }
 
-  /// @notice Calculate claimable redeem assets using pure pool mathematics
-  function _calculateClaimableRedeemAssets(address controller) internal view returns (uint256) {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-
-    uint256 pendingAssets = $.pendingRedeemAssets[controller];
-    if (pendingAssets == 0) return 0;
-
-    //  Corrected Pure Pool Calculation
-    bool isPriority = isPrioritized(controller);
-
-    if (isPriority) {
-      uint256 totalPriorityRequested = $.prioritizedAccRequestedRedeemAssets;
-      uint256 totalPriorityProcessed = $.prioritizedProcessedRedeemAssets;
-      uint256 totalPriorityClaimed = $.prioritizedClaimedRedeemAssets;
-
-      // Available for claiming = processed - already claimed
-      uint256 availableForClaim = totalPriorityProcessed - totalPriorityClaimed;
-      if (availableForClaim == 0) return 0;
-
-      // Total still pending = requested - claimed
-      uint256 totalPending = totalPriorityRequested - totalPriorityClaimed;
-      if (totalPending == 0) return 0;
-
-      return (pendingAssets * availableForClaim) / totalPending;
-    } else {
-      uint256 totalNormalRequested = $.accRequestedRedeemAssets;
-      uint256 totalNormalProcessed = $.processedRedeemAssets;
-      uint256 totalNormalClaimed = $.claimedRedeemAssets;
-
-      // Available for claiming = processed - already claimed
-      uint256 availableForClaim = totalNormalProcessed - totalNormalClaimed;
-      if (availableForClaim == 0) return 0;
-
-      // Total still pending = requested - claimed
-      uint256 totalPending = totalNormalRequested - totalNormalClaimed;
-      if (totalPending == 0) return 0;
-
-      return (pendingAssets * availableForClaim) / totalPending;
-    }
-  }
-
-  /// @notice ERC7540 redeem with Pure Pool calculation
+  /// @notice ERC7540 redeem with Epoch-based calculation
   function redeem(
     uint256 shares,
     address receiver,
@@ -748,26 +1004,46 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    // 1. Pure Pool: Calculate claimable shares dynamically
-    uint256 claimableShares = _calculateClaimableRedeemShares(controller);
-    require(claimableShares >= shares, "GenesisVault: insufficient claimable shares");
+    // Epoch-based: Calculate total claimable across all epochs
+    uint256 totalClaimable = _calculateClaimableRedeemSharesAcrossEpochs(controller);
+    require(totalClaimable >= shares, "GenesisVault: insufficient claimable shares");
 
-    // 2. Calculate assets
-    assets = _convertToAssets(shares, Math.Rounding.Floor);
+    // Process claims from oldest to newest epochs (FIFO)
+    uint256 remainingShares = shares;
+    uint256 totalAssetsRedeemed = 0;
 
-    // 3. Pure Pool: Deduct directly from pending amounts
-    $.pendingRedeemShares[controller] -= shares;
-    $.pendingRedeemAssets[controller] -= assets;
+    uint256[] memory userEpochs = $.userRedeemEpochs[controller];
+    for (uint256 i = 0; i < userEpochs.length && remainingShares > 0; i++) {
+      uint256 epoch = userEpochs[i];
+      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
 
-    // 4. Update pool state (increase claimed amounts)
-    bool isPriority = isPrioritized(controller);
-    if (isPriority) {
-      $.prioritizedClaimedRedeemAssets += assets;
-    } else {
-      $.claimedRedeemAssets += assets;
+      if (!epochData.isSettled || !epochData.redeemsProcessed) continue;
+
+      uint256 claimableShares = _calculateClaimableForEpoch(controller, epoch, false);
+      uint256 sharesToProcess = Math.min(remainingShares, claimableShares);
+
+      if (sharesToProcess > 0) {
+        // Use epoch-specific share price
+        uint256 epochAssets = (sharesToProcess * epochData.sharePrice) / 1e18;
+        totalAssetsRedeemed += epochAssets;
+
+        // Update global claimed amount
+        epochData.claimedRedeemShares += sharesToProcess;
+
+        // Update user-specific claimed amount
+        $.userEpochClaimedRedeemShares[controller][epoch] += sharesToProcess;
+
+        remainingShares -= sharesToProcess;
+      }
     }
 
-    // 5. Transfer assets
+    // Apply exit cost - user receives net amount after fee deduction
+    uint256 exitCostAmount = _costOnTotal(totalAssetsRedeemed, exitCost());
+    assets = totalAssetsRedeemed - exitCostAmount;
+
+    // Track accumulated fees
+    $.accumulatedFees += exitCostAmount;
+
     IERC20(asset()).safeTransfer(receiver, assets);
 
     emit Withdraw(_msgSender(), receiver, controller, assets, shares);
@@ -809,51 +1085,22 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     return assets;
   }
 
+  /// @notice ERC7540 - previewDeposit MUST revert for async vaults
   /// @inheritdoc ERC4626Upgradeable
   function previewDeposit(
     uint256 assets
   ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-    (uint256 shares, ) = _previewDepositWithCost(assets);
-    return shares;
+    assets; // silence unused parameter warning
+    revert("ERC7540: previewDeposit not supported for async vaults");
   }
 
-  function _previewDepositWithCost(
-    uint256 assets
-  ) private view returns (uint256 shares, uint256 cost) {
-    // calculate the amount of assets that will be utilized
-    uint256 assetsToUtilize = _assetsToUtilize(assets);
-
-    // apply entry fee only to the portion of assets that will be utilized
-    if (assetsToUtilize > 0) {
-      cost = _costOnTotal(assetsToUtilize, entryCost());
-      assets -= cost;
-    }
-
-    shares = _convertToShares(assets, Math.Rounding.Floor);
-    return (shares, cost);
-  }
-
+  /// @notice ERC7540 - previewMint MUST revert for async vaults
   /// @inheritdoc ERC4626Upgradeable
   function previewMint(
     uint256 shares
   ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-    (uint256 assets, ) = _previewMintWithCost(shares);
-    return assets;
-  }
-
-  function _previewMintWithCost(
-    uint256 shares
-  ) private view returns (uint256 assets, uint256 cost) {
-    assets = _convertToAssets(shares, Math.Rounding.Ceil);
-    // calculate the amount of assets that will be utilized
-    uint256 assetsToUtilize = _assetsToUtilize(assets);
-
-    // apply entry fee only to the portion of assets that will be utilized
-    if (assetsToUtilize > 0) {
-      cost = _costOnRaw(assetsToUtilize, entryCost());
-      assets += cost;
-    }
-    return (assets, cost);
+    shares; // silence unused parameter warning
+    revert("ERC7540: previewMint not supported for async vaults");
   }
 
   /// @notice ERC7540 - previewWithdraw MUST revert for async vaults
@@ -864,45 +1111,12 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     revert("ERC7540: previewWithdraw not supported for async vaults");
   }
 
-  function _previewWithdrawWithCost(
-    uint256 assets
-  ) private view returns (uint256 shares, uint256 cost) {
-    // calc the amount of assets that can not be withdrawn via idle
-    uint256 assetsToDeutilize = _assetsToDeutilize(assets);
-
-    // apply exit fee to assets that should be deutilized and add exit fee amount the asset amount
-    if (assetsToDeutilize > 0) {
-      cost = _costOnRaw(assetsToDeutilize, exitCost());
-      assets += cost;
-    }
-
-    shares = _convertToShares(assets, Math.Rounding.Ceil);
-    return (shares, cost);
-  }
-
   /// @notice ERC7540 - previewRedeem MUST revert for async vaults
   function previewRedeem(
     uint256 shares
   ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
     shares; // silence unused parameter warning
     revert("ERC7540: previewRedeem not supported for async vaults");
-  }
-
-  function _previewRedeemWithCost(
-    uint256 shares
-  ) private view returns (uint256 assets, uint256 cost) {
-    assets = _convertToAssets(shares, Math.Rounding.Floor);
-
-    // calculate the amount of assets that will be deutilized
-    uint256 assetsToDeutilize = _assetsToDeutilize(assets);
-
-    // apply exit fee to the portion of assets that will be deutilized
-    if (assetsToDeutilize > 0) {
-      cost = _costOnTotal(assetsToDeutilize, exitCost());
-      assets -= cost;
-    }
-
-    return (assets, cost);
   }
 
   /// @notice ERC7540 - maxDeposit returns max assets for requestDeposit
@@ -922,6 +1136,8 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
   /// @notice Calculate maximum assets that can be requested for deposit
   function _calculateMaxDepositRequest(address receiver) internal view returns (uint256) {
+    // TODO: Adjust this to use epoch-based data
+
     uint256 _userDepositLimit = userDepositLimit();
     uint256 _vaultDepositLimit = vaultDepositLimit();
 
@@ -934,9 +1150,18 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     uint256 userShares = balanceOf(receiver);
     uint256 userCurrentAssets = _convertToAssets(userShares, Math.Rounding.Floor);
 
-    // Add any pending deposit assets for this user
+    // Add any pending deposit assets for this user (across all unsettled epochs)
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    uint256 userPendingAssets = $.pendingDepositAssets[receiver];
+    uint256 userPendingAssets = 0;
+    uint256[] memory userEpochs = $.userDepositEpochs[receiver];
+
+    for (uint256 i = 0; i < userEpochs.length; i++) {
+      uint256 epoch = userEpochs[i];
+      if (!$.epochData[epoch].isSettled) {
+        userPendingAssets += $.userEpochDepositAssets[receiver][epoch];
+      }
+    }
+
     uint256 userTotalAssets = userCurrentAssets + userPendingAssets;
 
     // Calculate available user limit
@@ -965,7 +1190,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     return 0;
   }
 
-  /// @notice ERC7540 - maxWithdraw returns claimable assets using Pure Pool calculation
+  /// @notice ERC7540 - maxWithdraw returns claimable assets using Epoch-based calculation
   /// @inheritdoc ERC4626Upgradeable
   function maxWithdraw(
     address controller
@@ -973,11 +1198,11 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     if (paused()) {
       return 0;
     }
-    // Pure Pool: Dynamic calculation of claimable assets
-    return _calculateClaimableRedeemAssets(controller);
+    // Epoch-based: Dynamic calculation of claimable assets across all epochs
+    return _calculateClaimableRedeemAssetsAcrossEpochs(controller);
   }
 
-  /// @notice ERC7540 - maxRedeem returns claimable shares using Pure Pool calculation
+  /// @notice ERC7540 - maxRedeem returns claimable shares using Epoch-based calculation
   /// @inheritdoc ERC4626Upgradeable
   function maxRedeem(
     address controller
@@ -985,8 +1210,8 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     if (paused()) {
       return 0;
     }
-    // Pure Pool: Dynamic calculation of claimable shares
-    return _calculateClaimableRedeemShares(controller);
+    // Epoch-based: Dynamic calculation of claimable shares across all epochs
+    return _calculateClaimableRedeemSharesAcrossEpochs(controller);
   }
 
   /// @dev If there are pending withdraw requests, the deposited assets is used to process them.
@@ -1020,94 +1245,113 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   }
 
   /*//////////////////////////////////////////////////////////////
+                        EPOCH-BASED HELPER FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice Calculate claimable assets/shares for a specific epoch
+  /// @param controller The controller address
+  /// @param epoch The epoch to check
+  /// @param isDeposit True for deposit assets, false for redeem shares
+  /// @return claimable The amount claimable for this epoch
+  function _calculateClaimableForEpoch(
+    address controller,
+    uint256 epoch,
+    bool isDeposit
+  ) internal view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+    if (!epochData.isSettled) return 0;
+
+    if (isDeposit) {
+      if (!epochData.depositsProcessed) return 0;
+
+      uint256 userTotal = $.userEpochDepositAssets[controller][epoch];
+      uint256 userClaimed = $.userEpochClaimedDepositAssets[controller][epoch];
+
+      if (userTotal == 0) return 0;
+
+      // Simple and accurate: total - claimed = claimable
+      return userTotal > userClaimed ? userTotal - userClaimed : 0;
+    } else {
+      if (!epochData.redeemsProcessed) return 0;
+
+      uint256 userTotal = $.userEpochRedeemShares[controller][epoch];
+      uint256 userClaimed = $.userEpochClaimedRedeemShares[controller][epoch];
+
+      if (userTotal == 0) return 0;
+
+      // Simple and accurate: total - claimed = claimable
+      return userTotal > userClaimed ? userTotal - userClaimed : 0;
+    }
+  }
+
+  /// @notice Calculate claimable deposit assets across all settled epochs
+  function _calculateClaimableDepositAssetsAcrossEpochs(
+    address controller
+  ) internal view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    uint256 totalClaimable = 0;
+    uint256[] memory userEpochs = $.userDepositEpochs[controller];
+
+    for (uint256 i = 0; i < userEpochs.length; i++) {
+      uint256 epoch = userEpochs[i];
+      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+      if (epochData.isSettled && epochData.depositsProcessed) {
+        totalClaimable += _calculateClaimableForEpoch(controller, epoch, true);
+      }
+    }
+    return totalClaimable;
+  }
+
+  /// @notice Calculate claimable redeem shares across all settled epochs
+  function _calculateClaimableRedeemSharesAcrossEpochs(
+    address controller
+  ) internal view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    uint256 totalClaimable = 0;
+    uint256[] memory userEpochs = $.userRedeemEpochs[controller];
+
+    for (uint256 i = 0; i < userEpochs.length; i++) {
+      uint256 epoch = userEpochs[i];
+      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+      if (epochData.isSettled && epochData.redeemsProcessed) {
+        totalClaimable += _calculateClaimableForEpoch(controller, epoch, false);
+      }
+    }
+    return totalClaimable;
+  }
+
+  /*//////////////////////////////////////////////////////////////
                         PRIVATE FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-  /// @dev Calculate available capacity for processing deposit requests
-  function _calculateAvailableDepositCapacity() internal view returns (uint256) {
-    //  Consider vault deposit limit for processing capacity
-    uint256 _vaultDepositLimit = vaultDepositLimit();
-
-    // If vault limit is unlimited, no restriction on processing
-    if (_vaultDepositLimit == type(uint256).max) {
-      return type(uint256).max;
-    }
-
-    // Calculate available vault capacity
-    uint256 currentVaultAssets = totalAssets();
-    if (currentVaultAssets >= _vaultDepositLimit) {
-      return 0; // Vault limit reached, no more processing
-    }
-
-    uint256 availableVaultCapacity = _vaultDepositLimit - currentVaultAssets;
-
-    // In the future, this could also be limited by:
-    // - Strategy capacity: strategy.getAvailableCapacity()
-    // - Daily processing limits
-    // - Liquidity constraints
-    // For now, only consider vault limit
-
-    return availableVaultCapacity;
-  }
-
-  /// @notice Pure Pool-based deposit processing - O(1) complexity
-  /// @dev No individual request iteration needed - uses proportional calculation
-  function _calculateClaimableDepositAssets(address controller) internal view returns (uint256) {
+  /// @notice Calculate claimable redeem assets across all settled epochs (for legacy functions)
+  function _calculateClaimableRedeemAssetsAcrossEpochs(
+    address controller
+  ) internal view returns (uint256) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    uint256 totalClaimable = 0;
+    uint256[] memory userEpochs = $.userRedeemEpochs[controller];
 
-    uint256 pendingAssets = $.pendingDepositAssets[controller];
-    if (pendingAssets == 0) return 0;
+    for (uint256 i = 0; i < userEpochs.length; i++) {
+      uint256 epoch = userEpochs[i];
+      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
 
-    //  Corrected Pure Pool Calculation
-    uint256 totalRequested = $.accRequestedDepositAssets;
-    uint256 totalProcessed = $.processedDepositAssets;
-    uint256 totalClaimed = $.claimedDepositAssets;
-
-    // Available for claiming = processed - already claimed
-    uint256 availableForClaim = totalProcessed - totalClaimed;
-    if (availableForClaim == 0) return 0;
-
-    // Total still pending = requested - claimed
-    uint256 totalPending = totalRequested - totalClaimed;
-    if (totalPending == 0) return 0;
-
-    // Proportional calculation:
-    // claimable = (user's pending × available for claim) / total pending
-    uint256 claimableAssets = (pendingAssets * availableForClaim) / totalPending;
-
-    return claimableAssets;
-  }
-
-  /// @dev Calculate pending redeem amount for a controller
-  function _calculatePendingRedeemForController(
-    address /* controller */
-  ) internal pure returns (uint256) {
-    // This is a simplified implementation
-    // In a real implementation, you would iterate through all withdraw requests
-    // and sum up the pending amounts for this controller
-    return 0; // TODO: Implement proper calculation
-  }
-
-  /// @dev Calculates the cost that should be added to an amount `assets` that does not include cost.
-  /// Used in {IERC4626-mint} and {IERC4626-withdraw} operations.
-  function _costOnRaw(uint256 assets, uint256 costRate) private pure returns (uint256) {
-    return assets.mulDiv(costRate, FLOAT_PRECISION, Math.Rounding.Ceil);
+      if (epochData.isSettled && epochData.redeemsProcessed) {
+        uint256 claimableShares = _calculateClaimableForEpoch(controller, epoch, false);
+        // Convert shares to assets using epoch-specific share price
+        totalClaimable += (claimableShares * epochData.sharePrice) / 1e18;
+      }
+    }
+    return totalClaimable;
   }
 
   /// @dev Calculates the cost part of an amount `assets` that already includes cost.
-  /// Used in {IERC4626-deposit} and {IERC4626-redeem} operations.
   function _costOnTotal(uint256 assets, uint256 costRate) private pure returns (uint256) {
     return assets.mulDiv(costRate, costRate + FLOAT_PRECISION, Math.Rounding.Ceil);
-  }
-
-  function _assetsToUtilize(uint256 assets) private view returns (uint256) {
-    (, uint256 assetsToUtilize) = assets.trySub(totalPendingWithdraw());
-    return assetsToUtilize;
-  }
-
-  function _assetsToDeutilize(uint256 assets) private view returns (uint256) {
-    (, uint256 assetsToDeutilize) = assets.trySub(idleAssets());
-    return assetsToDeutilize;
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -1148,5 +1392,15 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   /// @notice When this vault is shutdown, only withdrawals are available. It can't be reverted.
   function isShutdown() public view returns (bool) {
     return GenesisVaultStorage.layout().shutdown;
+  }
+
+  /// @notice Get accumulated fees
+  function accumulatedFees() public view returns (uint256) {
+    return GenesisVaultStorage.layout().accumulatedFees;
+  }
+
+  /// @notice The address of baseVol contract.
+  function baseVolContract() public view returns (address) {
+    return GenesisVaultStorage.layout().baseVolContract;
   }
 }
