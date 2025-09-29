@@ -219,8 +219,8 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     emit PrioritizedAccountAdded(account);
   }
 
-  /// @notice Removes a prioritized account (only owner can call)
-  function removePrioritizedAccount(address account) external onlyOwner {
+  /// @notice Removes a prioritized account (only admin can call)
+  function removePrioritizedAccount(address account) external onlyAdmin {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
     uint256 length = $.prioritizedAccounts.length;
     for (uint256 i = 0; i < length; i++) {
@@ -297,10 +297,10 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     _harvestPerformanceFeeShares();
   }
 
-  /// @notice Withdraw accumulated fees (only owner)
+  /// @notice Withdraw accumulated fees (only admin)
   /// @param to Address to receive the fees
   /// @param amount Amount of fees to withdraw (0 = all)
-  function withdrawFees(address to, uint256 amount) external onlyOwner {
+  function withdrawFees(address to, uint256 amount) external onlyAdmin {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
     uint256 availableFees = $.accumulatedFees;

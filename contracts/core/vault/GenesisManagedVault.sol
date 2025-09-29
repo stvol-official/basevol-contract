@@ -12,6 +12,7 @@ import { ERC4626Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ER
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { GenesisVaultManagedVaultStorage } from "./storage/GenesisVaultManagedVaultStorage.sol";
 import { IGenesisVaultErrors } from "./errors/GenesisVaultErrors.sol";
+import { GenesisVaultStorage } from "./storage/GenesisVaultStorage.sol";
 
 /// @title BaseVolManagedVault
 ///
@@ -63,6 +64,14 @@ abstract contract GenesisManagedVault is
   /// @dev Emitted when a new whitelist provider is set.
   event WhitelistProviderChanged(address account, address newWhitelistProvider);
 
+  /// @dev Modifier to restrict function access to admin only
+  modifier onlyAdmin() {
+    if (_msgSender() != admin()) {
+      revert OnlyAdmin();
+    }
+    _;
+  }
+
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
     _disableInitializers();
@@ -112,7 +121,7 @@ abstract contract GenesisManagedVault is
     uint256 _managementFee,
     uint256 _performanceFee,
     uint256 _hurdleRate
-  ) external onlyOwner {
+  ) external onlyAdmin {
     require(_feeRecipient != address(0));
     require(_managementFee <= MAX_MANAGEMENT_FEE);
     require(_performanceFee <= MAX_PERFORMANCE_FEE);
@@ -148,7 +157,7 @@ abstract contract GenesisManagedVault is
   }
 
   /// @dev Sets the deposit limits including user and vault limit.
-  function setDepositLimits(uint256 userLimit, uint256 vaultLimit) external onlyOwner {
+  function setDepositLimits(uint256 userLimit, uint256 vaultLimit) external onlyAdmin {
     _setDepositLimits(userLimit, vaultLimit);
   }
 
@@ -488,5 +497,10 @@ abstract contract GenesisManagedVault is
   /// @notice The allowed deposit limit of this vault.
   function vaultDepositLimit() public view returns (uint256) {
     return GenesisVaultManagedVaultStorage.layout().vaultDepositLimit;
+  }
+
+  /// @notice The address of admin who is responsible for operational management.
+  function admin() public view returns (address) {
+    return GenesisVaultStorage.layout().admin;
   }
 }
