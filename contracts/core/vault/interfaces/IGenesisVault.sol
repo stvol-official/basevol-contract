@@ -30,8 +30,11 @@ interface IGenesisVault {
   /// @notice Returns whether this vault has been shut down
   function isShutdown() external view returns (bool);
 
-  /// @notice Returns the total pending withdraw amount
+  /// @notice Returns the total pending withdraw amount (unsettled epochs)
   function totalPendingWithdraw() external view returns (uint256);
+
+  /// @notice Returns the total claimable withdraw amount (settled but unclaimed epochs)
+  function totalClaimableWithdraw() external view returns (uint256);
 
   /*//////////////////////////////////////////////////////////////
                             ADMIN FUNCTIONS

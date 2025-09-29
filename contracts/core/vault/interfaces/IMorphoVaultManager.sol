@@ -35,7 +35,7 @@ interface IMorphoVaultManager {
 
   /// @notice Gets the total utilized amount (current asset value)
   /// @return The total utilized amount
-  function totalUtilized() external view returns (uint256); // = morphoAssetBalance
+  function totalUtilized() external view returns (uint256); // = morphoAssetBalance()
 
   /// @notice Gets the current yield/profit from Morpho
   /// @return The accumulated yield

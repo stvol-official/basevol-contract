@@ -12,32 +12,22 @@ library GenesisVaultStorage {
   // All request data is now tracked in epoch-based mappings
 
   struct EpochData {
-    // Deposit related data
+    // Request data
     /// @dev Total assets requested for deposit during this epoch
     uint256 totalRequestedDepositAssets;
-    /// @dev Deposit assets that have been processed (available for claim)
-    uint256 processedDepositAssets;
     /// @dev Deposit assets that have been claimed by users
     uint256 claimedDepositAssets;
-    // Redeem related data
     /// @dev Total shares requested for redemption during this epoch
     uint256 totalRequestedRedeemShares;
-    /// @dev Redeem shares that have been processed (available for claim)
-    uint256 processedRedeemShares;
     /// @dev Redeem shares that have been claimed by users
     uint256 claimedRedeemShares;
-    // Common settlement data
+    // Settlement data
     /// @dev Share price when this epoch was settled (1e18 precision)
     uint256 sharePrice;
-    /// @dev Whether this epoch has been settled by BaseVol
+    /// @dev Whether this epoch has been settled by BaseVol (when true, all requests become claimable)
     bool isSettled;
     /// @dev Timestamp when settlement occurred
     uint256 settlementTimestamp;
-    // Processing order control (redemptions processed first)
-    /// @dev Whether redemptions have been processed for this epoch
-    bool redeemsProcessed;
-    /// @dev Whether deposits have been processed for this epoch
-    bool depositsProcessed;
   }
 
   struct Layout {
@@ -59,18 +49,17 @@ library GenesisVaultStorage {
     // Deposit tracking
     /// @dev User's deposited assets per epoch
     mapping(address => mapping(uint256 => uint256)) userEpochDepositAssets;
+    /// @dev User's claimed deposit assets per epoch
+    mapping(address => mapping(uint256 => uint256)) userEpochClaimedDepositAssets;
     /// @dev List of epochs where user made deposits
     mapping(address => uint256[]) userDepositEpochs;
     // Redeem tracking
     /// @dev User's redeemed shares per epoch
     mapping(address => mapping(uint256 => uint256)) userEpochRedeemShares;
-    /// @dev List of epochs where user made redemptions
-    mapping(address => uint256[]) userRedeemEpochs;
-    // User-specific claim tracking
-    /// @dev User's claimed deposit assets per epoch
-    mapping(address => mapping(uint256 => uint256)) userEpochClaimedDepositAssets;
     /// @dev User's claimed redeem shares per epoch
     mapping(address => mapping(uint256 => uint256)) userEpochClaimedRedeemShares;
+    /// @dev List of epochs where user made redemptions
+    mapping(address => uint256[]) userRedeemEpochs;
     // Fee tracking
     /// @dev Total accumulated fees (from deposits and withdrawals/redemptions)
     uint256 accumulatedFees;

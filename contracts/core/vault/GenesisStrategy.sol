@@ -258,14 +258,14 @@ contract GenesisStrategy is
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
     IGenesisVault _vault = $.vault;
 
-    // Priority 1: Handle withdraw requests first
-    uint256 pendingWithdraw = _vault.totalPendingWithdraw();
+    // Priority 1: Handle immediate withdraw requests first (claimable = settled but unclaimed)
+    uint256 claimableWithdraw = _vault.totalClaimableWithdraw();
     uint256 availableInStrategy = assetsToWithdraw();
 
-    if (pendingWithdraw > availableInStrategy) {
-      // Need to deutilize to fulfill withdraw requests
-      _deutilizeForWithdrawals(pendingWithdraw - availableInStrategy);
-      emit KeeperAction("DEUTILIZE_FOR_WITHDRAW", pendingWithdraw);
+    if (claimableWithdraw > availableInStrategy) {
+      // Need to deutilize to fulfill immediate withdraw requests
+      _deutilizeForWithdrawals(claimableWithdraw - availableInStrategy);
+      emit KeeperAction("DEUTILIZE_FOR_WITHDRAW", claimableWithdraw);
       return;
     }
 
