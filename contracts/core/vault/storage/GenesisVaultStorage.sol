@@ -22,7 +22,7 @@ library GenesisVaultStorage {
     /// @dev Redeem shares that have been claimed by users
     uint256 claimedRedeemShares;
     // Settlement data
-    /// @dev Share price when this epoch was settled (1e18 precision)
+    /// @dev Share price when this epoch was settled (scaled by share decimals precision)
     uint256 sharePrice;
     /// @dev Whether this epoch has been settled by BaseVol (when true, all requests become claimable)
     bool isSettled;

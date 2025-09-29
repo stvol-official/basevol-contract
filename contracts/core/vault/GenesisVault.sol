@@ -135,12 +135,15 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
   /// @notice Called by BaseVol contract when an epoch is settled
   /// @param epoch The epoch number that was settled
-  /// @param sharePrice The final share price for this epoch (in 1e18 precision)
-  function onEpochSettled(uint256 epoch, uint256 sharePrice) external {
+  function onEpochSettled(uint256 epoch) external {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
     require(msg.sender == $.baseVolContract, "GenesisVault: unauthorized");
 
     GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+    // Calculate share price based on vault's current state
+    uint256 sharePrice = _calculateEpochSharePrice(epoch);
+
     epochData.sharePrice = sharePrice;
     epochData.isSettled = true;
     epochData.settlementTimestamp = block.timestamp;
@@ -206,8 +209,8 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     _setExitCost(newExitCost);
   }
 
-  /// @notice Adds a prioritized account (only owner can call)
-  function addPrioritizedAccount(address account) external onlyOwner {
+  /// @notice Adds a prioritized account (only admin can call)
+  function addPrioritizedAccount(address account) external onlyAdmin {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
     // Check if already exists
     for (uint256 i = 0; i < $.prioritizedAccounts.length; i++) {
@@ -679,7 +682,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
         if (claimableShares > 0) {
           // Use epoch-specific share price for accurate calculation
-          uint256 claimableAssets = (claimableShares * epochData.sharePrice) / 1e18;
+          uint256 claimableAssets = (claimableShares * epochData.sharePrice) / (10 ** decimals());
           totalClaimable += claimableAssets;
         }
       }
@@ -714,7 +717,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     require(claimableAssets >= assets, "GenesisVault: insufficient claimable assets");
 
     // Use epoch-specific share price
-    shares = (assets * 1e18) / epochData.sharePrice;
+    shares = (assets * (10 ** decimals())) / epochData.sharePrice;
 
     // Update global claimed amount
     epochData.claimedDepositAssets += assets;
@@ -749,7 +752,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     require(claimableShares >= shares, "GenesisVault: insufficient claimable shares");
 
     // Use epoch-specific share price
-    uint256 grossAssets = (shares * epochData.sharePrice) / 1e18;
+    uint256 grossAssets = (shares * epochData.sharePrice) / (10 ** decimals());
 
     // Apply exit cost - user receives net amount after fee deduction
     uint256 exitCostAmount = _costOnTotal(grossAssets, exitCost());
@@ -829,7 +832,8 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
       if (assetsToProcess > 0) {
         // Use epoch-specific share price
-        uint256 epochShares = (assetsToProcess * 1e18) / epochData.sharePrice;
+        // shares = assets * (10^shareDecimals) / sharePrice
+        uint256 epochShares = (assetsToProcess * (10 ** decimals())) / epochData.sharePrice;
         totalShares += epochShares;
 
         // Update global claimed amount
@@ -877,12 +881,12 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
       if (claimableAssets == 0) continue;
 
       // Calculate how many shares we can get from this epoch
-      uint256 epochShares = (claimableAssets * 1e18) / epochData.sharePrice;
+      uint256 epochShares = (claimableAssets * (10 ** decimals())) / epochData.sharePrice;
       uint256 sharesToProcess = Math.min(remainingShares, epochShares);
 
       if (sharesToProcess > 0) {
         // Calculate assets needed for these shares using epoch-specific price
-        uint256 assetsNeeded = (sharesToProcess * epochData.sharePrice) / 1e18;
+        uint256 assetsNeeded = (sharesToProcess * epochData.sharePrice) / (10 ** decimals());
         totalAssetsUsed += assetsNeeded;
 
         // Update global claimed amount
@@ -921,13 +925,13 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
     // Calculate gross assets needed to get desired net assets after exit cost
-    // net = gross - (gross * exitCost / 1e18)
-    // net = gross * (1 - exitCost / 1e18)
-    // gross = net / (1 - exitCost / 1e18)
+    // net = gross - (gross * exitCost / FLOAT_PRECISION)
+    // net = gross * (1 - exitCost / FLOAT_PRECISION)
+    // gross = net / (1 - exitCost / FLOAT_PRECISION)
     uint256 exitCostRate = exitCost();
     uint256 grossAssetsNeeded;
     if (exitCostRate > 0) {
-      grossAssetsNeeded = (assets * 1e18) / (1e18 - exitCostRate);
+      grossAssetsNeeded = (assets * FLOAT_PRECISION) / (FLOAT_PRECISION - exitCostRate);
     } else {
       grossAssetsNeeded = assets;
     }
@@ -951,12 +955,12 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
       if (claimableShares == 0) continue;
 
       // Calculate assets available from this epoch
-      uint256 epochAssets = (claimableShares * epochData.sharePrice) / 1e18;
+      uint256 epochAssets = (claimableShares * epochData.sharePrice) / (10 ** decimals());
       uint256 assetsToProcess = Math.min(remainingGrossAssets, epochAssets);
 
       if (assetsToProcess > 0) {
         // Calculate shares needed using epoch-specific share price
-        uint256 epochSharesNeeded = (assetsToProcess * 1e18) / epochData.sharePrice;
+        uint256 epochSharesNeeded = (assetsToProcess * (10 ** decimals())) / epochData.sharePrice;
         totalShares += epochSharesNeeded;
 
         // Update global claimed amount
@@ -1011,7 +1015,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
       if (sharesToProcess > 0) {
         // Use epoch-specific share price
-        uint256 epochAssets = (sharesToProcess * epochData.sharePrice) / 1e18;
+        uint256 epochAssets = (sharesToProcess * epochData.sharePrice) / (10 ** decimals());
         totalAssetsRedeemed += epochAssets;
 
         // Update global claimed amount
@@ -1313,6 +1317,100 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
                         PRIVATE FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
+  /// @notice Calculate share price for a specific epoch based on vault performance
+  /// @param epoch The epoch to calculate share price for
+  /// @return sharePrice The calculated share price (assets per share scaled by share decimals)
+  function _calculateEpochSharePrice(uint256 epoch) internal view returns (uint256) {
+    // If this is the first epoch or vault has no shares, use initial price
+    if (totalSupply() == 0) {
+      // Return 1 share worth 1 asset unit, scaled properly for decimals
+      return 10 ** decimals(); // This handles the decimals offset correctly
+    }
+
+    // Get strategy performance data for this epoch
+    address strategyAddress = strategy();
+    if (strategyAddress == address(0)) {
+      // No strategy deployed yet, return 1:1 ratio
+      return 10 ** decimals();
+    }
+
+    // Calculate share price based on total vault value EXCLUDING pending deposits
+    // This prevents pending deposits from inflating the share price before epoch settlement
+    uint256 vaultTotalAssets = _totalAssetsForSharePrice();
+    uint256 vaultTotalSupply = totalSupply();
+
+    if (vaultTotalSupply == 0) {
+      return 10 ** decimals();
+    }
+
+    // Share price = (total assets per share) scaled by share decimals
+    // For proper decimals handling: assets * 10^shareDecimals / totalSupply
+    return (vaultTotalAssets * (10 ** decimals())) / vaultTotalSupply;
+  }
+
+  /// @notice Calculate total assets for share price calculation (excluding pending deposits)
+  /// @dev This prevents pending deposits from artificially inflating share price before settlement
+  /// @return assets Total assets excluding pending deposits
+  function _totalAssetsForSharePrice() internal view returns (uint256) {
+    // Start with current strategy-controlled assets and claimable obligations
+    address strategyAddress = strategy();
+    uint256 strategyAssets = strategyAddress != address(0)
+      ? IGenesisStrategy(strategyAddress).utilizedAssets()
+      : 0;
+
+    // Add only settled (non-pending) idle assets
+    uint256 settledIdleAssets = _settledIdleAssets();
+
+    // Subtract claimable withdrawals
+    uint256 claimableWithdrawals = totalClaimableWithdraw();
+
+    (, uint256 totalAssetsForPrice) = (settledIdleAssets + strategyAssets).trySub(
+      claimableWithdrawals
+    );
+    return totalAssetsForPrice;
+  }
+
+  /// @notice Calculate idle assets excluding pending deposits
+  /// @return assets Idle assets that have been settled and can be considered for share price
+  function _settledIdleAssets() internal view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+
+    // Get total vault balance
+    uint256 totalBalance = IERC20(asset()).balanceOf(address(this));
+
+    // Subtract accumulated fees
+    uint256 fees = $.accumulatedFees;
+
+    // Subtract total pending deposits (not yet settled)
+    uint256 totalPendingDeposits = _totalPendingDeposits();
+
+    // Return: total balance - fees - pending deposits
+    uint256 grossSettledAssets = totalBalance > fees ? totalBalance - fees : 0;
+    (, uint256 settledAssets) = grossSettledAssets.trySub(totalPendingDeposits);
+
+    return settledAssets;
+  }
+
+  /// @notice Calculate total pending deposit assets across all unsettled epochs
+  /// @return pendingAssets Total assets in pending state
+  function _totalPendingDeposits() internal view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    uint256 totalPending = 0;
+    uint256 currentEpoch = getCurrentEpoch();
+
+    // Check recent epochs (last 10) for pending deposits
+    for (uint256 i = 0; i < 10 && currentEpoch >= i; i++) {
+      uint256 epoch = currentEpoch - i;
+      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+
+      if (!epochData.isSettled && epochData.totalRequestedDepositAssets > 0) {
+        totalPending += epochData.totalRequestedDepositAssets;
+      }
+    }
+
+    return totalPending;
+  }
+
   /// @notice Calculate claimable redeem assets across all settled epochs (for legacy functions)
   function _calculateClaimableRedeemAssetsAcrossEpochs(
     address controller
@@ -1328,7 +1426,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
       if (epochData.isSettled) {
         uint256 claimableShares = _calculateClaimableForEpoch(controller, epoch, false);
         // Convert shares to assets using epoch-specific share price
-        totalClaimable += (claimableShares * epochData.sharePrice) / 1e18;
+        totalClaimable += (claimableShares * epochData.sharePrice) / (10 ** decimals());
       }
     }
     return totalClaimable;
