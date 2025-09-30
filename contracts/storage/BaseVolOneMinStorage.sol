@@ -9,8 +9,12 @@ import { PythLazer } from "../libraries/PythLazer.sol";
 
 library BaseVolOneMinStorage {
   // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.onemin.secure")) - 1)) & ~bytes32(uint256(0xff));
-  bytes32 internal constant SLOT =
+  bytes32 internal constant SLOT_MAINNET =
     0x8be1692dc372f8902eb9c7cd5d19a5bdd4af3b9d33c637a94997c776bf7c1c00;
+
+  // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.onemin")) - 1)) & ~bytes32(uint256(0xff));
+  bytes32 internal constant SLOT_TESTNET =
+    0xf47b8291f4eb0ba594d826a8a543e71011d93618498a6b680f32cdb25823c400;
 
   struct Layout {
     IERC20 token; // Prediction token
@@ -26,10 +30,21 @@ library BaseVolOneMinStorage {
     /* IMPROTANT: you can add new variables here */
   }
 
-  function layout() internal pure returns (Layout storage $) {
-    bytes32 slot = SLOT;
+  function layout() internal view returns (Layout storage $) {
+    bytes32 slot = _getSlot();
     assembly {
       $.slot := slot
+    }
+  }
+
+  function _getSlot() internal view returns (bytes32) {
+    uint256 chainId = block.chainid;
+    if (chainId == 8453) {
+      return SLOT_MAINNET;
+    } else if (chainId == 84532) {
+      return SLOT_TESTNET;
+    } else {
+      return SLOT_TESTNET;
     }
   }
 }
