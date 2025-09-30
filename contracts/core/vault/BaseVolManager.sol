@@ -120,10 +120,10 @@ contract BaseVolManager is
         $.clearingHouse.userBalances(address(this))
       );
       // Call strategy callback on success
-      IGenesisStrategy($.strategy).depositCompletedCallback(amount, true);
+      IGenesisStrategy($.strategy).baseVolDepositCompletedCallback(amount, true);
     } catch {
       // Failure - call strategy callback on failure
-      IGenesisStrategy($.strategy).depositCompletedCallback(amount, false);
+      IGenesisStrategy($.strategy).baseVolDepositCompletedCallback(amount, false);
       revert("Deposit to ClearingHouse failed");
     }
   }
@@ -153,10 +153,10 @@ contract BaseVolManager is
       _asset.safeTransfer(strategy(), amount);
 
       // Instead, call the strategy callback to let it handle the asset transfer
-      IGenesisStrategy($.strategy).withdrawCompletedCallback(amount, true);
+      IGenesisStrategy($.strategy).baseVolWithdrawCompletedCallback(amount, true);
     } catch {
       // Failure - call strategy callback on failure
-      IGenesisStrategy($.strategy).withdrawCompletedCallback(amount, false);
+      IGenesisStrategy($.strategy).baseVolWithdrawCompletedCallback(amount, false);
       revert("Withdraw from ClearingHouse failed");
     }
   }
@@ -232,8 +232,13 @@ contract BaseVolManager is
     _unpause();
   }
 
-  /// @notice Gets the current ClearingHouse balance for this manager
-  function clearingHouseBalance() public view returns (uint256) {
+  /// @notice Gets the total ClearingHouse balance including escrowed funds (for share price calculation)
+  function totalClearingHouseBalance() public view returns (uint256) {
+    return BaseVolManagerStorage.layout().clearingHouse.totalUserBalances(address(this));
+  }
+
+  /// @notice Gets the withdrawable ClearingHouse balance (for withdrawal operations)
+  function withdrawableClearingHouseBalance() public view returns (uint256) {
     return BaseVolManagerStorage.layout().clearingHouse.userBalances(address(this));
   }
 

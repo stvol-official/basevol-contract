@@ -567,14 +567,20 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   }
 
   /// @notice The underlying asset amount in this vault that is free to withdraw or utilize.
-  /// @dev Excludes accumulated fees which are reserved for withdrawal by owner
+  /// @dev Excludes accumulated fees and pending deposits which are not yet settled
   function idleAssets() public view returns (uint256) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
     uint256 totalBalance = IERC20(asset()).balanceOf(address(this));
     uint256 fees = $.accumulatedFees;
 
-    // Return total balance minus accumulated fees
-    return totalBalance > fees ? totalBalance - fees : 0;
+    // Subtract total pending deposits (not yet settled)
+    uint256 totalPendingDeposits = _totalPendingDeposits();
+
+    // Return total balance minus accumulated fees and pending deposits
+    uint256 grossSettledAssets = totalBalance > fees ? totalBalance - fees : 0;
+    (, uint256 settledAssets) = grossSettledAssets.trySub(totalPendingDeposits);
+
+    return settledAssets;
   }
 
   /// @notice Returns total claimable redeem assets across all settled epochs
@@ -917,7 +923,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   {
     // Only subtract confirmed obligations (claimable), not pending (unconfirmed) obligations
     // Pending withdraws use current share price which is inaccurate for unsettled epochs
-    (, assets) = (idleAssets() + IGenesisStrategy(strategy()).utilizedAssets()).trySub(
+    (, assets) = (idleAssets() + IGenesisStrategy(strategy()).totalAssetsUnderManagement()).trySub(
       totalClaimableWithdraw()
     );
     return assets;
@@ -1271,11 +1277,11 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     // Start with current strategy-controlled assets and claimable obligations
     address strategyAddress = strategy();
     uint256 strategyAssets = strategyAddress != address(0)
-      ? IGenesisStrategy(strategyAddress).utilizedAssets()
+      ? IGenesisStrategy(strategyAddress).totalAssetsUnderManagement()
       : 0;
 
     // Add only settled (non-pending) idle assets
-    uint256 settledIdleAssets = _settledIdleAssets();
+    uint256 settledIdleAssets = idleAssets();
 
     // Subtract claimable withdrawals
     uint256 claimableWithdrawals = totalClaimableWithdraw();
@@ -1284,27 +1290,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
       claimableWithdrawals
     );
     return totalAssetsForPrice;
-  }
-
-  /// @notice Calculate idle assets excluding pending deposits
-  /// @return assets Idle assets that have been settled and can be considered for share price
-  function _settledIdleAssets() internal view returns (uint256) {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-
-    // Get total vault balance
-    uint256 totalBalance = IERC20(asset()).balanceOf(address(this));
-
-    // Subtract accumulated fees
-    uint256 fees = $.accumulatedFees;
-
-    // Subtract total pending deposits (not yet settled)
-    uint256 totalPendingDeposits = _totalPendingDeposits();
-
-    // Return: total balance - fees - pending deposits
-    uint256 grossSettledAssets = totalBalance > fees ? totalBalance - fees : 0;
-    (, uint256 settledAssets) = grossSettledAssets.trySub(totalPendingDeposits);
-
-    return settledAssets;
   }
 
   /// @notice Calculate total pending deposit assets across all unsettled epochs

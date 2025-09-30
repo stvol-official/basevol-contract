@@ -50,6 +50,13 @@ interface IGenesisStrategy {
   function utilizedAssets() external view returns (uint256);
 
   /**
+   * @notice Returns the total assets under management including idle assets in strategy
+   * @dev This includes strategy idle assets + BaseVol assets + Morpho assets (real-time)
+   * @return Total assets managed by this strategy
+   */
+  function totalAssetsUnderManagement() external view returns (uint256);
+
+  /**
    * @notice Processes assets that are pending withdrawal
    * @dev This function handles the withdrawal queue and processes pending requests
    */
@@ -67,14 +74,14 @@ interface IGenesisStrategy {
    * @param amount The amount that was deposited
    * @param success Whether the deposit operation was successful
    */
-  function depositCompletedCallback(uint256 amount, bool success) external;
+  function baseVolDepositCompletedCallback(uint256 amount, bool success) external;
 
   /**
-   * @notice Callback function called when a withdrawal operation completes
+   * @notice Callback function called when a BaseVol withdrawal operation completes
    * @param amount The amount that was withdrawn
    * @param success Whether the withdrawal operation was successful
    */
-  function withdrawCompletedCallback(uint256 amount, bool success) external;
+  function baseVolWithdrawCompletedCallback(uint256 amount, bool success) external;
 
   /**
    * @notice Callback function called when a Morpho deposit operation completes

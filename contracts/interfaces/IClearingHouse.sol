@@ -78,4 +78,6 @@ interface IClearingHouse {
 
   function baseVolManagerDeposit(uint256 amount) external;
   function baseVolManagerWithdraw(uint256 amount) external;
+  function totalUserBalances(address user) external view returns (uint256);
+  function userEscrowBalances(address user) external view returns (uint256);
 }
