@@ -21,10 +21,6 @@ library GenesisVaultManagedVaultStorage {
     uint256 hurdleRate;
     // last timestamp for management fee
     uint256 lastAccruedTimestamp;
-    // high water mark of totalAssets
-    uint256 hwm;
-    // last timestamp for performance fee
-    uint256 lastHarvestedTimestamp;
     // address of the whitelist provider
     address whitelistProvider;
     // deposit limit in assets for each user

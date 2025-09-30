@@ -41,53 +41,70 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   event PrioritizedAccountRemoved(address indexed account);
 
   // Epoch-based events
-  event EpochSettled(uint256 indexed epoch, uint256 sharePrice);
-  event DepositFromEpoch(
-    address indexed controller,
-    address indexed receiver,
+  event RoundSettled(uint256 indexed epoch, uint256 sharePrice);
+
+  // Epoch Settlement Processing events
+  event RoundSettlementProcessed(
     uint256 indexed epoch,
-    uint256 assets,
-    uint256 shares,
-    uint256 sharePrice
+    uint256 requiredLiquidity,
+    uint256 availableLiquidity,
+    bool liquidityRequestMade
   );
-  event RedeemFromEpoch(
-    address indexed controller,
-    address indexed receiver,
-    uint256 indexed epoch,
-    uint256 shares,
-    uint256 assets,
-    uint256 sharePrice
-  );
-  event BatchDeposit(
-    address indexed controller,
-    address indexed receiver,
-    uint256[] epochs,
-    uint256[] amounts,
-    uint256 totalShares
-  );
+  event StrategyLiquidityRequested(uint256 amount);
+  event StrategyUtilizationNeeded(uint256 idleAssets);
 
   // Fee-related events
   event FeesWithdrawn(address indexed to, uint256 amount);
+  event PerformanceFeeCharged(
+    address indexed user,
+    uint256 feeAmount,
+    uint256 currentSharePrice,
+    uint256 userWAEP
+  );
+
+  // Keeper-related events
+  event KeeperAdded(address indexed keeper);
+  event KeeperRemoved(address indexed keeper);
 
   // ERC7540 Events (use OpenZeppelin's Withdraw/Redeem events)
+
+  /// @notice Modifier to restrict access to keepers only
+  modifier onlyKeeper() {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    bool isKeeper = false;
+    for (uint i = 0; i < $.keepers.length; i++) {
+      if (msg.sender == $.keepers[i]) {
+        isKeeper = true;
+        break;
+      }
+    }
+    require(isKeeper, "GenesisVault: caller is not a keeper");
+    _;
+  }
 
   function initialize(
     address baseVolContract_,
     address asset_,
     uint256 entryCost_,
     uint256 exitCost_,
+    address initialKeeper_,
     string calldata name_,
     string calldata symbol_
   ) external initializer {
     __GenesisManagedVault_init(msg.sender, msg.sender, asset_, name_, symbol_);
     require(entryCost_ <= MAX_COST, "Entry cost too high");
     require(exitCost_ <= MAX_COST, "Exit cost too high");
+    require(initialKeeper_ != address(0), "GenesisVault: invalid initial keeper");
 
     _setEntryCost(entryCost_);
     _setExitCost(exitCost_);
 
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
     $.baseVolContract = baseVolContract_;
+
+    // Add initial keeper
+    $.keepers.push(initialKeeper_);
+    emit KeeperAdded(initialKeeper_);
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -121,29 +138,27 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     try IBaseVol(baseVolContract).currentEpoch() returns (uint256 currentEpoch) {
       return currentEpoch;
     } catch {
-      return 0;
+      revert BaseVolContractNotSet();
     }
   }
 
-  /// @notice Called by BaseVol contract when an epoch is settled
+  /// @notice Called by BaseVol contract when a round is settled
   /// @param epoch The epoch number that was settled
-  function onEpochSettled(uint256 epoch) external {
+  function onRoundSettled(uint256 epoch) external onlyKeeper {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    require(msg.sender == $.baseVolContract, "GenesisVault: unauthorized");
 
-    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+    GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
     // Calculate share price based on vault's current state
-    uint256 sharePrice = _calculateEpochSharePrice(epoch);
+    uint256 sharePrice = _calculateRoundSharePrice(epoch);
 
-    epochData.sharePrice = sharePrice;
-    epochData.isSettled = true;
-    epochData.settlementTimestamp = block.timestamp;
+    roundData.sharePrice = sharePrice;
+    roundData.isSettled = true;
+    roundData.settlementTimestamp = block.timestamp;
+    emit RoundSettled(epoch, sharePrice);
 
-    // When isSettled = true, all requests in this epoch become immediately claimable
-    // No need for separate processing steps since everything is processed atomically
-
-    emit EpochSettled(epoch, sharePrice);
+    // Process round settlement including liquidity management
+    _processRoundSettlement(epoch);
   }
 
   /// @notice Set BaseVol contract address (only owner)
@@ -187,33 +202,20 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     _setExitCost(newExitCost);
   }
 
-  /// @notice Adds a prioritized account (only admin can call)
-  function addPrioritizedAccount(address account) external onlyAdmin {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    // Check if already exists
-    for (uint256 i = 0; i < $.prioritizedAccounts.length; i++) {
-      if ($.prioritizedAccounts[i] == account) {
-        revert AccountAlreadyPrioritized();
-      }
+  function _setEntryCost(uint256 value) internal {
+    require(value <= MAX_COST, "Entry cost exceeds maximum");
+    if (entryCost() != value) {
+      GenesisVaultStorage.layout().entryCost = value;
+      emit EntryCostUpdated(_msgSender(), value);
     }
-    $.prioritizedAccounts.push(account);
-    emit PrioritizedAccountAdded(account);
   }
 
-  /// @notice Removes a prioritized account (only admin can call)
-  function removePrioritizedAccount(address account) external onlyAdmin {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    uint256 length = $.prioritizedAccounts.length;
-    for (uint256 i = 0; i < length; i++) {
-      if ($.prioritizedAccounts[i] == account) {
-        // Move last element to current position and pop
-        $.prioritizedAccounts[i] = $.prioritizedAccounts[length - 1];
-        $.prioritizedAccounts.pop();
-        emit PrioritizedAccountRemoved(account);
-        return;
-      }
+  function _setExitCost(uint256 value) internal {
+    require(value <= MAX_COST, "Exit cost exceeds maximum");
+    if (exitCost() != value) {
+      GenesisVaultStorage.layout().exitCost = value;
+      emit ExitCostUpdated(_msgSender(), value);
     }
-    revert AccountNotPrioritized();
   }
 
   /// @notice Shutdown vault, where all deposit/mint are disabled while withdraw/redeem are still available.
@@ -253,29 +255,12 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     // 1. all shares should be redeemed.
     // 2. utilized assets should be zero that means all requests have been processed.
     // 3. All assets should be withdrawn from strategy and no pending requests should remain.
-    require(
-      totalSupply() == 0 &&
-        IGenesisStrategy(strategy()).utilizedAssets() == 0 &&
-        totalPendingWithdraw() == 0
-    );
+    require(totalSupply() == 0 && IGenesisStrategy(strategy()).utilizedAssets() == 0);
 
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    // ERC7540: sweep ERC7540 pending states if needed
-    // Note: In normal operation, these should already be zero
-
-    // sweep prioritized accounts array
-    delete $.prioritizedAccounts;
-
     // sweep idle assets
     IERC20(asset()).safeTransfer(receiver, idleAssets());
-  }
-
-  function harvestPerformanceFee() external {
-    if (_msgSender() != strategy()) {
-      revert CallerNotStrategy();
-    }
-    _harvestPerformanceFeeShares();
   }
 
   /// @notice Withdraw accumulated fees (only admin)
@@ -295,6 +280,50 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     IERC20(asset()).safeTransfer(to, withdrawAmount);
 
     emit FeesWithdrawn(to, withdrawAmount);
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                          KEEPER MANAGEMENT
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice Add a keeper address (only admin)
+  /// @param keeper The address to add as a keeper
+  function addKeeper(address keeper) external onlyAdmin {
+    require(keeper != address(0), "GenesisVault: invalid keeper address");
+
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+
+    // Check if keeper already exists
+    for (uint i = 0; i < $.keepers.length; i++) {
+      require($.keepers[i] != keeper, "GenesisVault: keeper already exists");
+    }
+
+    $.keepers.push(keeper);
+    emit KeeperAdded(keeper);
+  }
+
+  /// @notice Remove a keeper address (only admin)
+  /// @param keeper The address to remove from keepers
+  function removeKeeper(address keeper) external onlyAdmin {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+
+    for (uint i = 0; i < $.keepers.length; i++) {
+      if ($.keepers[i] == keeper) {
+        // Move last element to current position and remove last element
+        $.keepers[i] = $.keepers[$.keepers.length - 1];
+        $.keepers.pop();
+        emit KeeperRemoved(keeper);
+        return;
+      }
+    }
+
+    revert("GenesisVault: keeper not found");
+  }
+
+  /// @notice Get all keeper addresses
+  /// @return Array of keeper addresses
+  function getKeepers() external view returns (address[] memory) {
+    return GenesisVaultStorage.layout().keepers;
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -376,11 +405,14 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // Update epoch-based tracking with net assets (after fee)
     $.userEpochDepositAssets[controller][currentEpoch] += netAssets;
-    $.epochData[currentEpoch].totalRequestedDepositAssets += netAssets;
+    $.roundData[currentEpoch].totalRequestedDepositAssets += netAssets;
 
     // Add to user's epoch list (avoid duplicates)
     if ($.userEpochDepositAssets[controller][currentEpoch] == netAssets) {
       $.userDepositEpochs[controller].push(currentEpoch);
+
+      // Add user to epoch deposit users list for auto-processing (avoid duplicates)
+      _addUserToEpochDepositList(controller, currentEpoch);
     }
 
     emit DepositRequest(controller, owner, requestId, _msgSender(), assets);
@@ -403,8 +435,8 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // MUST NOT include any assets in Claimable state for deposit
     // Check if the epoch is settled (i.e., claimable)
-    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
-    if (epochData.isSettled) {
+    GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
+    if (roundData.isSettled) {
       return 0; // Assets are in claimable state, not pending
     }
 
@@ -427,71 +459,13 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // MUST NOT include any assets in Pending state for deposit
     // Check if the epoch is settled (i.e., claimable)
-    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
-    if (!epochData.isSettled) {
+    GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
+    if (!roundData.isSettled) {
       return 0; // Assets are still in pending state, not claimable
     }
 
     // Calculate claimable assets for this specific epoch
     return _calculateClaimableForEpoch(controller, epoch, true);
-  }
-
-  /*//////////////////////////////////////////////////////////////
-                          ASYNC WITHDRAW LOGIC
-    //////////////////////////////////////////////////////////////*/
-
-  /// @notice Returns the maximum amount of the underlying asset that can be
-  /// requested to withdraw from the owner balance in the Vault,
-  /// through a requestRedeem call (ERC7540 uses requestRedeem for both)
-  function maxRequestWithdraw(address owner) public view returns (uint256) {
-    if (paused()) {
-      return 0;
-    }
-    // Return max assets based on owner's shares (for redeem requests)
-    uint256 shares = balanceOf(owner);
-    return _convertToAssets(shares, Math.Rounding.Floor);
-  }
-
-  /// @notice Returns the maximum amount of Vault shares that can be
-  /// requested to redeem from the owner balance in the Vault,
-  /// through a requestRedeem call.
-  function maxRequestRedeem(address owner) public view returns (uint256) {
-    if (paused()) {
-      return 0;
-    }
-    // Return owner's share balance for redeem requests
-    return balanceOf(owner);
-  }
-
-  /// @notice ERC7540 - Returns max assets for requestDeposit (same as maxDeposit)
-  function maxRequestDeposit(address owner) public view returns (uint256) {
-    return maxDeposit(owner);
-  }
-
-  /// @notice ERC7540 - Returns max assets for immediate withdraw (claimable only) using Epoch-based calculation
-  function maxClaimableWithdraw(address controller) public view returns (uint256) {
-    return _calculateClaimableRedeemAssetsAcrossEpochs(controller);
-  }
-
-  /// @notice ERC7540 - Returns max shares for immediate redeem (claimable only) using Epoch-based calculation
-  function maxClaimableRedeem(address controller) public view returns (uint256) {
-    return _calculateClaimableRedeemSharesAcrossEpochs(controller);
-  }
-
-  function _setEntryCost(uint256 value) internal {
-    require(value <= MAX_COST, "Entry cost exceeds maximum");
-    if (entryCost() != value) {
-      GenesisVaultStorage.layout().entryCost = value;
-      emit EntryCostUpdated(_msgSender(), value);
-    }
-  }
-
-  function _setExitCost(uint256 value) internal {
-    require(value <= MAX_COST, "Exit cost exceeds maximum");
-    if (exitCost() != value) {
-      GenesisVaultStorage.layout().exitCost = value;
-      emit ExitCostUpdated(_msgSender(), value);
-    }
   }
 
   /// @notice ERC7540 redeem request with priority support
@@ -517,9 +491,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     }
     _burn(owner, shares);
 
-    // Check priority status
-    bool isPrioritizedAccount = isPrioritized(owner);
-
     // Create request
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
@@ -531,11 +502,14 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // Update epoch-based tracking
     $.userEpochRedeemShares[controller][currentEpoch] += shares;
-    $.epochData[currentEpoch].totalRequestedRedeemShares += shares;
+    $.roundData[currentEpoch].totalRequestedRedeemShares += shares;
 
     // Add to user's epoch list (avoid duplicates)
     if ($.userEpochRedeemShares[controller][currentEpoch] == shares) {
       $.userRedeemEpochs[controller].push(currentEpoch);
+
+      // Add user to epoch redeem users list for auto-processing (avoid duplicates)
+      _addUserToEpochRedeemList(controller, currentEpoch);
     }
 
     emit RedeemRequest(controller, owner, requestId, _msgSender(), shares);
@@ -558,8 +532,8 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // MUST NOT include any shares in Claimable state for redeem
     // Check if the epoch is settled (i.e., claimable)
-    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
-    if (epochData.isSettled) {
+    GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
+    if (roundData.isSettled) {
       return 0; // Shares are in claimable state, not pending
     }
 
@@ -582,24 +556,13 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // MUST NOT include any shares in Pending state for redeem
     // Check if the epoch is settled (i.e., claimable)
-    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
-    if (!epochData.isSettled) {
+    GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
+    if (!roundData.isSettled) {
       return 0; // Shares are still in pending state, not claimable
     }
 
     // Calculate claimable shares for this specific epoch
     return _calculateClaimableForEpoch(controller, epoch, false);
-  }
-
-  /// @notice Tells if the owner is prioritized to withdraw.
-  function isPrioritized(address owner) public view returns (bool) {
-    address[] memory _prioritizedAccounts = prioritizedAccounts();
-    for (uint256 i = 0; i < _prioritizedAccounts.length; i++) {
-      if (_prioritizedAccounts[i] == owner) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /// @notice The underlying asset amount in this vault that is free to withdraw or utilize.
@@ -611,31 +574,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // Return total balance minus accumulated fees
     return totalBalance > fees ? totalBalance - fees : 0;
-  }
-
-  /// @notice ERC7540 - Returns total pending redeem assets across all unsettled epochs
-  /// @dev For ERC4626 compatibility - represents future obligations not yet settled
-  function totalPendingWithdraw() public view returns (uint256) {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    uint256 totalPending = 0;
-
-    // Sum up pending withdrawals across all users and epochs
-    // Note: This is an approximation for compatibility. In practice,
-    // we should track this more efficiently or calculate it differently.
-    uint256 currentEpoch = getCurrentEpoch();
-
-    // Check recent epochs (last 10) for pending redemptions
-    for (uint256 i = 0; i < 10 && currentEpoch >= i; i++) {
-      uint256 epoch = currentEpoch - i;
-      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
-
-      if (!epochData.isSettled && epochData.totalRequestedRedeemShares > 0) {
-        // Convert shares to approximate assets using current share price
-        totalPending += _convertToAssets(epochData.totalRequestedRedeemShares, Math.Rounding.Floor);
-      }
-    }
-
-    return totalPending;
   }
 
   /// @notice Returns total claimable redeem assets across all settled epochs
@@ -650,128 +588,23 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     // Check last 50 epochs to cover longer settlement periods
     for (uint256 i = 0; i < 50 && currentEpoch >= i; i++) {
       uint256 epoch = currentEpoch - i;
-      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
       // Only count settled epochs (claimable state)
-      if (epochData.isSettled) {
-        uint256 requested = epochData.totalRequestedRedeemShares;
-        uint256 claimed = epochData.claimedRedeemShares;
+      if (roundData.isSettled) {
+        uint256 requested = roundData.totalRequestedRedeemShares;
+        uint256 claimed = roundData.claimedRedeemShares;
         uint256 claimableShares = requested > claimed ? requested - claimed : 0;
 
         if (claimableShares > 0) {
           // Use epoch-specific share price for accurate calculation
-          uint256 claimableAssets = (claimableShares * epochData.sharePrice) / (10 ** decimals());
+          uint256 claimableAssets = (claimableShares * roundData.sharePrice) / (10 ** decimals());
           totalClaimable += claimableAssets;
         }
       }
     }
 
     return totalClaimable;
-  }
-
-  /*//////////////////////////////////////////////////////////////
-                        EPOCH-SPECIFIC FUNCTIONS
-    //////////////////////////////////////////////////////////////*/
-
-  /// @notice Deposit from a specific epoch using epoch-specific share price
-  /// @param epoch The epoch to claim from
-  /// @param assets The amount of assets to claim
-  /// @param receiver The address to receive the shares
-  /// @param controller The address that controls the request
-  /// @return shares The amount of shares minted
-  function depositFromEpoch(
-    uint256 epoch,
-    uint256 assets,
-    address receiver,
-    address controller
-  ) external onlyControllerOrOperator(controller) returns (uint256 shares) {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
-
-    require(epochData.isSettled, "GenesisVault: epoch not ready");
-
-    // Calculate claimable assets for this specific epoch
-    uint256 claimableAssets = _calculateClaimableForEpoch(controller, epoch, true);
-    require(claimableAssets >= assets, "GenesisVault: insufficient claimable assets");
-
-    // Use epoch-specific share price
-    shares = (assets * (10 ** decimals())) / epochData.sharePrice;
-
-    // Update global claimed amount
-    epochData.claimedDepositAssets += assets;
-
-    // Update user-specific claimed amount
-    $.userEpochClaimedDepositAssets[controller][epoch] += assets;
-
-    _mint(receiver, shares);
-    emit DepositFromEpoch(controller, receiver, epoch, assets, shares, epochData.sharePrice);
-    return shares;
-  }
-
-  /// @notice Redeem from a specific epoch using epoch-specific share price
-  /// @param epoch The epoch to claim from
-  /// @param shares The amount of shares to redeem
-  /// @param receiver The address to receive the assets
-  /// @param controller The address that controls the request
-  /// @return assets The amount of assets transferred
-  function redeemFromEpoch(
-    uint256 epoch,
-    uint256 shares,
-    address receiver,
-    address controller
-  ) external onlyControllerOrOperator(controller) returns (uint256 assets) {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
-
-    require(epochData.isSettled, "GenesisVault: epoch not ready");
-
-    // Calculate claimable shares for this specific epoch
-    uint256 claimableShares = _calculateClaimableForEpoch(controller, epoch, false);
-    require(claimableShares >= shares, "GenesisVault: insufficient claimable shares");
-
-    // Use epoch-specific share price
-    uint256 grossAssets = (shares * epochData.sharePrice) / (10 ** decimals());
-
-    // Apply exit cost - user receives net amount after fee deduction
-    uint256 exitCostAmount = _costOnTotal(grossAssets, exitCost());
-    assets = grossAssets - exitCostAmount;
-
-    // Track accumulated fees
-    $.accumulatedFees += exitCostAmount;
-
-    // Update global claimed amount
-    epochData.claimedRedeemShares += shares;
-
-    // Update user-specific claimed amount
-    $.userEpochClaimedRedeemShares[controller][epoch] += shares;
-
-    IERC20(asset()).safeTransfer(receiver, assets);
-    emit RedeemFromEpoch(controller, receiver, epoch, shares, assets, epochData.sharePrice);
-    return assets;
-  }
-
-  /// @notice Batch deposit from multiple epochs
-  /// @param epochs Array of epochs to claim from
-  /// @param amounts Array of asset amounts to claim from each epoch
-  /// @param receiver The address to receive the shares
-  /// @param controller The address that controls the requests
-  /// @return totalShares The total amount of shares minted
-  function batchDepositFromEpochs(
-    uint256[] calldata epochs,
-    uint256[] calldata amounts,
-    address receiver,
-    address controller
-  ) external onlyControllerOrOperator(controller) returns (uint256 totalShares) {
-    require(epochs.length == amounts.length, "GenesisVault: array length mismatch");
-
-    for (uint256 i = 0; i < epochs.length; i++) {
-      if (amounts[i] > 0) {
-        totalShares += this.depositFromEpoch(epochs[i], amounts[i], receiver, controller);
-      }
-    }
-
-    emit BatchDeposit(controller, receiver, epochs, amounts, totalShares);
-    return totalShares;
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -801,9 +634,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     uint256[] memory userEpochs = $.userDepositEpochs[controller];
     for (uint256 i = 0; i < userEpochs.length && remainingAssets > 0; i++) {
       uint256 epoch = userEpochs[i];
-      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
-      if (!epochData.isSettled) continue;
+      if (!roundData.isSettled) continue;
 
       uint256 claimableAssets = _calculateClaimableForEpoch(controller, epoch, true);
       uint256 assetsToProcess = Math.min(remainingAssets, claimableAssets);
@@ -811,11 +644,14 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
       if (assetsToProcess > 0) {
         // Use epoch-specific share price
         // shares = assets * (10^shareDecimals) / sharePrice
-        uint256 epochShares = (assetsToProcess * (10 ** decimals())) / epochData.sharePrice;
+        uint256 epochShares = (assetsToProcess * (10 ** decimals())) / roundData.sharePrice;
         totalShares += epochShares;
 
+        // Update WAEP for the receiver with epoch-specific share price
+        _updateUserWAEP(receiver, epochShares, roundData.sharePrice);
+
         // Update global claimed amount
-        epochData.claimedDepositAssets += assetsToProcess;
+        roundData.claimedDepositAssets += assetsToProcess;
 
         // Update user-specific claimed amount
         $.userEpochClaimedDepositAssets[controller][epoch] += assetsToProcess;
@@ -851,24 +687,27 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     uint256[] memory userEpochs = $.userDepositEpochs[controller];
     for (uint256 i = 0; i < userEpochs.length && remainingShares > 0; i++) {
       uint256 epoch = userEpochs[i];
-      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
-      if (!epochData.isSettled) continue;
+      if (!roundData.isSettled) continue;
 
       uint256 claimableAssets = _calculateClaimableForEpoch(controller, epoch, true);
       if (claimableAssets == 0) continue;
 
       // Calculate how many shares we can get from this epoch
-      uint256 epochShares = (claimableAssets * (10 ** decimals())) / epochData.sharePrice;
+      uint256 epochShares = (claimableAssets * (10 ** decimals())) / roundData.sharePrice;
       uint256 sharesToProcess = Math.min(remainingShares, epochShares);
 
       if (sharesToProcess > 0) {
         // Calculate assets needed for these shares using epoch-specific price
-        uint256 assetsNeeded = (sharesToProcess * epochData.sharePrice) / (10 ** decimals());
+        uint256 assetsNeeded = (sharesToProcess * roundData.sharePrice) / (10 ** decimals());
         totalAssetsUsed += assetsNeeded;
 
+        // Update WAEP for the receiver with epoch-specific share price
+        _updateUserWAEP(receiver, sharesToProcess, roundData.sharePrice);
+
         // Update global claimed amount
-        epochData.claimedDepositAssets += assetsNeeded;
+        roundData.claimedDepositAssets += assetsNeeded;
 
         // Update user-specific claimed amount
         $.userEpochClaimedDepositAssets[controller][epoch] += assetsNeeded;
@@ -921,28 +760,37 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     // Process claims from oldest to newest epochs (FIFO)
     uint256 remainingGrossAssets = grossAssetsNeeded;
     uint256 totalShares = 0;
+    uint256 totalPerformanceFees = 0;
 
     uint256[] memory userEpochs = $.userRedeemEpochs[controller];
     for (uint256 i = 0; i < userEpochs.length && remainingGrossAssets > 0; i++) {
       uint256 epoch = userEpochs[i];
-      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
-      if (!epochData.isSettled) continue;
+      if (!roundData.isSettled) continue;
 
       uint256 claimableShares = _calculateClaimableForEpoch(controller, epoch, false);
       if (claimableShares == 0) continue;
 
       // Calculate assets available from this epoch
-      uint256 epochAssets = (claimableShares * epochData.sharePrice) / (10 ** decimals());
+      uint256 epochAssets = (claimableShares * roundData.sharePrice) / (10 ** decimals());
       uint256 assetsToProcess = Math.min(remainingGrossAssets, epochAssets);
 
       if (assetsToProcess > 0) {
         // Calculate shares needed using epoch-specific share price
-        uint256 epochSharesNeeded = (assetsToProcess * (10 ** decimals())) / epochData.sharePrice;
+        uint256 epochSharesNeeded = (assetsToProcess * (10 ** decimals())) / roundData.sharePrice;
         totalShares += epochSharesNeeded;
 
+        // Calculate and charge performance fee for this withdrawal
+        uint256 feeAmount = _calculateAndChargePerformanceFee(
+          controller,
+          epochSharesNeeded,
+          roundData.sharePrice
+        );
+        totalPerformanceFees += feeAmount;
+
         // Update global claimed amount
-        epochData.claimedRedeemShares += epochSharesNeeded;
+        roundData.claimedRedeemShares += epochSharesNeeded;
 
         // Update user-specific claimed amount
         $.userEpochClaimedRedeemShares[controller][epoch] += epochSharesNeeded;
@@ -952,6 +800,15 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     }
 
     shares = totalShares;
+
+    // Apply exit cost to gross assets
+    uint256 exitCostAmount = _costOnTotal(grossAssetsNeeded, exitCostRate);
+    $.accumulatedFees += exitCostAmount;
+
+    // Final amount = gross assets - exit cost - performance fees
+    uint256 finalAmount = grossAssetsNeeded - exitCostAmount - totalPerformanceFees;
+    require(finalAmount >= assets, "GenesisVault: insufficient after fees");
+
     IERC20(asset()).safeTransfer(receiver, assets);
 
     emit Withdraw(_msgSender(), receiver, controller, assets, shares);
@@ -980,24 +837,33 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     // Process claims from oldest to newest epochs (FIFO)
     uint256 remainingShares = shares;
     uint256 totalAssetsRedeemed = 0;
+    uint256 totalPerformanceFees = 0;
 
     uint256[] memory userEpochs = $.userRedeemEpochs[controller];
     for (uint256 i = 0; i < userEpochs.length && remainingShares > 0; i++) {
       uint256 epoch = userEpochs[i];
-      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
-      if (!epochData.isSettled) continue;
+      if (!roundData.isSettled) continue;
 
       uint256 claimableShares = _calculateClaimableForEpoch(controller, epoch, false);
       uint256 sharesToProcess = Math.min(remainingShares, claimableShares);
 
       if (sharesToProcess > 0) {
         // Use epoch-specific share price
-        uint256 epochAssets = (sharesToProcess * epochData.sharePrice) / (10 ** decimals());
+        uint256 epochAssets = (sharesToProcess * roundData.sharePrice) / (10 ** decimals());
         totalAssetsRedeemed += epochAssets;
 
+        // Calculate and charge performance fee for this redemption
+        uint256 feeAmount = _calculateAndChargePerformanceFee(
+          controller,
+          sharesToProcess,
+          roundData.sharePrice
+        );
+        totalPerformanceFees += feeAmount;
+
         // Update global claimed amount
-        epochData.claimedRedeemShares += sharesToProcess;
+        roundData.claimedRedeemShares += sharesToProcess;
 
         // Update user-specific claimed amount
         $.userEpochClaimedRedeemShares[controller][epoch] += sharesToProcess;
@@ -1008,9 +874,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // Apply exit cost - user receives net amount after fee deduction
     uint256 exitCostAmount = _costOnTotal(totalAssetsRedeemed, exitCost());
-    assets = totalAssetsRedeemed - exitCostAmount;
+    assets = totalAssetsRedeemed - exitCostAmount - totalPerformanceFees;
 
-    // Track accumulated fees
+    // Track accumulated fees (exit cost only, performance fees already tracked)
     $.accumulatedFees += exitCostAmount;
 
     IERC20(asset()).safeTransfer(receiver, assets);
@@ -1090,7 +956,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     revert("ERC7540: previewRedeem not supported for async vaults");
   }
 
-  /// @notice ERC7540 - maxDeposit returns max assets for requestDeposit
+  /// @notice ERC7540 - maxDeposit returns max assets for deposit (claimable)
   /// @inheritdoc ERC4626Upgradeable
   function maxDeposit(
     address receiver
@@ -1099,10 +965,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
       return 0;
     }
 
-    // ERC7540: Return max assets that can be requested for deposit
-    // This represents the maximum amount for requestDeposit, not immediate deposit
-    uint256 maxCapacity = _calculateMaxDepositRequest(receiver);
-    return maxCapacity;
+    // Return max assets that can be claimed via deposit() function
+    // This represents claimable deposit assets across all settled epochs
+    return _calculateClaimableDepositAssetsAcrossEpochs(receiver);
   }
 
   /// @notice Calculate maximum assets that can be requested for deposit
@@ -1128,7 +993,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     for (uint256 i = 0; i < userEpochs.length; i++) {
       uint256 epoch = userEpochs[i];
-      if (!$.epochData[epoch].isSettled) {
+      if (!$.roundData[epoch].isSettled) {
         userPendingAssets += $.userEpochDepositAssets[receiver][epoch];
       }
     }
@@ -1150,15 +1015,50 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     return availableUserLimit < availableVaultLimit ? availableUserLimit : availableVaultLimit;
   }
 
-  /// @notice ERC7540 - maxMint returns 0 since requestMint doesn't exist
+  /// @notice ERC7540 - maxMint returns max shares for mint (claimable)
   /// @inheritdoc ERC4626Upgradeable
   function maxMint(
-    address /* receiver */
+    address receiver
   ) public view virtual override(GenesisManagedVault, IERC4626) returns (uint256) {
-    // ERC7540: mint() is deprecated and requestMint() doesn't exist
-    // Therefore, no shares can be minted directly
-    // Users should use requestDeposit() instead
-    return 0;
+    if (paused() || isShutdown()) {
+      return 0;
+    }
+
+    // Return max shares that can be claimed via mint() function
+    // Calculate based on claimable deposit assets across all settled epochs
+    uint256 claimableAssets = _calculateClaimableDepositAssetsAcrossEpochs(receiver);
+    if (claimableAssets == 0) {
+      return 0;
+    }
+
+    // Convert claimable assets to shares using epoch-specific calculations
+    return _calculateClaimableSharesFromAssets(receiver, claimableAssets);
+  }
+
+  /// @notice Returns the maximum amount of assets that can be requested for deposit
+  /// @param receiver The address that will receive the shares after settlement
+  /// @return assets The maximum amount of assets that can be requested via requestDeposit
+  function maxRequestDeposit(address receiver) public view returns (uint256) {
+    if (paused() || isShutdown()) {
+      return 0;
+    }
+
+    // Return max assets that can be requested for deposit
+    // This represents the maximum amount for requestDeposit based on deposit limits
+    return _calculateMaxDepositRequest(receiver);
+  }
+
+  /// @notice Returns the maximum amount of shares that can be requested for redeem
+  /// @param owner The address that owns the shares to be redeemed
+  /// @return shares The maximum amount of shares that can be requested via requestRedeem
+  function maxRequestRedeem(address owner) public view returns (uint256) {
+    if (paused() || isShutdown()) {
+      return 0;
+    }
+
+    // Return max shares that can be requested for redeem
+    // This is simply the owner's current share balance since they can request to redeem all their shares
+    return balanceOf(owner);
   }
 
   /// @notice ERC7540 - maxWithdraw returns claimable assets using Epoch-based calculation
@@ -1230,9 +1130,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     bool isDeposit
   ) internal view returns (uint256) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+    GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
-    if (!epochData.isSettled) return 0;
+    if (!roundData.isSettled) return 0;
 
     if (isDeposit) {
       uint256 userTotal = $.userEpochDepositAssets[controller][epoch];
@@ -1263,9 +1163,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     for (uint256 i = 0; i < userEpochs.length; i++) {
       uint256 epoch = userEpochs[i];
-      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
-      if (epochData.isSettled) {
+      if (roundData.isSettled) {
         totalClaimable += _calculateClaimableForEpoch(controller, epoch, true);
       }
     }
@@ -1282,13 +1182,47 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     for (uint256 i = 0; i < userEpochs.length; i++) {
       uint256 epoch = userEpochs[i];
-      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
-      if (epochData.isSettled) {
+      if (roundData.isSettled) {
         totalClaimable += _calculateClaimableForEpoch(controller, epoch, false);
       }
     }
     return totalClaimable;
+  }
+
+  /// @notice Calculate maximum shares that can be obtained from claimable assets
+  /// @param controller The controller address
+  /// @param claimableAssets The total claimable assets amount
+  /// @return shares The maximum shares that can be minted from claimable assets
+  function _calculateClaimableSharesFromAssets(
+    address controller,
+    uint256 claimableAssets
+  ) internal view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    uint256 totalShares = 0;
+    uint256 remainingAssets = claimableAssets;
+
+    uint256[] memory userEpochs = $.userDepositEpochs[controller];
+    for (uint256 i = 0; i < userEpochs.length && remainingAssets > 0; i++) {
+      uint256 epoch = userEpochs[i];
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
+
+      if (!roundData.isSettled) continue;
+
+      uint256 claimableAssetsForEpoch = _calculateClaimableForEpoch(controller, epoch, true);
+      uint256 assetsToProcess = Math.min(remainingAssets, claimableAssetsForEpoch);
+
+      if (assetsToProcess > 0) {
+        // Use epoch-specific share price to calculate shares
+        // shares = assets * (10^shareDecimals) / sharePrice
+        uint256 epochShares = (assetsToProcess * (10 ** decimals())) / roundData.sharePrice;
+        totalShares += epochShares;
+        remainingAssets -= assetsToProcess;
+      }
+    }
+
+    return totalShares;
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -1298,7 +1232,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   /// @notice Calculate share price for a specific epoch based on vault performance
   /// @param epoch The epoch to calculate share price for
   /// @return sharePrice The calculated share price (assets per share scaled by share decimals)
-  function _calculateEpochSharePrice(uint256 epoch) internal view returns (uint256) {
+  function _calculateRoundSharePrice(uint256 epoch) internal view returns (uint256) {
     // If this is the first epoch or vault has no shares, use initial price
     if (totalSupply() == 0) {
       // Return 1 share worth 1 asset unit, scaled properly for decimals
@@ -1315,7 +1249,10 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     // Calculate share price based on total vault value EXCLUDING pending deposits
     // This prevents pending deposits from inflating the share price before epoch settlement
     uint256 vaultTotalAssets = _totalAssetsForSharePrice();
-    uint256 vaultTotalSupply = totalSupply();
+
+    // Include pending redeem shares in total supply for consistent share price calculation
+    // This mirrors how we exclude pending deposits from assets
+    uint256 vaultTotalSupply = totalSupply() + _totalPendingRedeemShares();
 
     if (vaultTotalSupply == 0) {
       return 10 ** decimals();
@@ -1379,10 +1316,30 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     // Check recent epochs (last 10) for pending deposits
     for (uint256 i = 0; i < 10 && currentEpoch >= i; i++) {
       uint256 epoch = currentEpoch - i;
-      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
-      if (!epochData.isSettled && epochData.totalRequestedDepositAssets > 0) {
-        totalPending += epochData.totalRequestedDepositAssets;
+      if (!roundData.isSettled && roundData.totalRequestedDepositAssets > 0) {
+        totalPending += roundData.totalRequestedDepositAssets;
+      }
+    }
+
+    return totalPending;
+  }
+
+  /// @notice Calculate total pending redeem shares across all unsettled epochs
+  /// @return pendingShares Total shares in pending state
+  function _totalPendingRedeemShares() internal view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    uint256 totalPending = 0;
+    uint256 currentEpoch = getCurrentEpoch();
+
+    // Check recent epochs (last 10) for pending redeems
+    for (uint256 i = 0; i < 10 && currentEpoch >= i; i++) {
+      uint256 epoch = currentEpoch - i;
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
+
+      if (!roundData.isSettled && roundData.totalRequestedRedeemShares > 0) {
+        totalPending += roundData.totalRequestedRedeemShares;
       }
     }
 
@@ -1399,15 +1356,269 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     for (uint256 i = 0; i < userEpochs.length; i++) {
       uint256 epoch = userEpochs[i];
-      GenesisVaultStorage.EpochData storage epochData = $.epochData[epoch];
+      GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
-      if (epochData.isSettled) {
+      if (roundData.isSettled) {
         uint256 claimableShares = _calculateClaimableForEpoch(controller, epoch, false);
         // Convert shares to assets using epoch-specific share price
-        totalClaimable += (claimableShares * epochData.sharePrice) / (10 ** decimals());
+        totalClaimable += (claimableShares * roundData.sharePrice) / (10 ** decimals());
       }
     }
     return totalClaimable;
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                    ROUND SETTLEMENT PROCESSING FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice Calculate required assets for redemptions in a specific round (excluding fees)
+  /// @param epoch The round id (=epoch) to calculate redeem assets for
+  /// @return Total assets needed for redemptions in this round
+  function _calculateRoundRedeemAssets(uint256 epoch) internal view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
+
+    if (!roundData.isSettled) return 0;
+
+    uint256 totalRedeemShares = roundData.totalRequestedRedeemShares;
+    uint256 claimedShares = roundData.claimedRedeemShares;
+    uint256 claimableShares = totalRedeemShares > claimedShares
+      ? totalRedeemShares - claimedShares
+      : 0;
+
+    if (claimableShares == 0) return 0;
+
+    // Use round-specific share price for accurate asset calculation
+    return (claimableShares * roundData.sharePrice) / (10 ** decimals());
+  }
+
+  /// @notice Calculate deposit assets ready for processing in a specific epoch
+  /// @param epoch The round id (=epoch) to calculate deposit assets for
+  /// @return Total assets ready for deposit processing in this epoch
+  function _calculateRoundDepositAssets(uint256 epoch) internal view returns (uint256) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
+
+    if (!roundData.isSettled) return 0;
+
+    uint256 totalDepositAssets = roundData.totalRequestedDepositAssets;
+    uint256 claimedAssets = roundData.claimedDepositAssets;
+
+    return totalDepositAssets > claimedAssets ? totalDepositAssets - claimedAssets : 0;
+  }
+
+  /// @notice Process epoch settlement including liquidity management and strategy coordination
+  /// @param epoch The settled round id (=epoch)
+  function _processRoundSettlement(uint256 epoch) internal {
+    // 1. Calculate required assets for redemptions in this epoch
+    uint256 requiredRedeemAssets = _calculateRoundRedeemAssets(epoch);
+
+    // 2. Check current available assets
+    uint256 availableAssets = idleAssets();
+
+    // 3. Request liquidity from strategy if insufficient
+    bool liquidityRequestMade = false;
+    if (requiredRedeemAssets > availableAssets) {
+      uint256 shortfall = requiredRedeemAssets - availableAssets;
+      _requestLiquidityFromStrategy(shortfall);
+      liquidityRequestMade = true;
+    }
+
+    // 4. Auto-process all user requests for this epoch
+    _autoProcessEpochRequests(epoch);
+
+    // 5. Signal strategy for idle asset utilization (async)
+    _notifyStrategyForUtilization();
+
+    emit RoundSettlementProcessed(
+      epoch,
+      requiredRedeemAssets,
+      availableAssets,
+      liquidityRequestMade
+    );
+  }
+
+  /// @notice Request liquidity from strategy to meet withdrawal demands
+  /// @param amount Required liquidity amount
+  function _requestLiquidityFromStrategy(uint256 amount) internal {
+    address strategyAddr = strategy();
+    if (strategyAddr == address(0)) return;
+
+    // Currently only able to get idle balance from strategy
+    // Process only if strategy is active
+    try IGenesisStrategy(strategyAddr).processAssetsToWithdraw() {
+      emit StrategyLiquidityRequested(amount);
+    } catch {
+      // Strategy call failure should not stop vault settlement
+      // Log event and let next keeper rebalance handle it
+      // TODO: Add more sophisticated error handling if needed
+    }
+  }
+
+  /// @notice Auto-process all user requests for the given epoch
+  /// @param epoch The epoch to process user requests for
+  function _autoProcessEpochRequests(uint256 epoch) internal {
+    // Process all redemption requests first (withdraw assets from vault)
+    _autoProcessEpochRedeems(epoch);
+
+    // Process all deposit requests second (mint shares to users)
+    _autoProcessEpochDeposits(epoch);
+  }
+
+  /// @notice Auto-process all redemption requests for the given epoch
+  /// @param epoch The epoch to process redemption requests for
+  function _autoProcessEpochRedeems(uint256 epoch) internal {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    address[] memory redeemUsers = $.epochRedeemUsers[epoch];
+
+    for (uint256 i = 0; i < redeemUsers.length; i++) {
+      address user = redeemUsers[i];
+      _autoProcessUserRedeem(user, epoch);
+    }
+  }
+
+  /// @notice Auto-process all deposit requests for the given epoch
+  /// @param epoch The epoch to process deposit requests for
+  function _autoProcessEpochDeposits(uint256 epoch) internal {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    address[] memory depositUsers = $.epochDepositUsers[epoch];
+
+    for (uint256 i = 0; i < depositUsers.length; i++) {
+      address user = depositUsers[i];
+      _autoProcessUserDeposit(user, epoch);
+    }
+  }
+
+  /// @notice Auto-process a single user's redemption requests for the given epoch
+  /// @param user The user address to process
+  /// @param epoch The epoch to process
+  function _autoProcessUserRedeem(address user, uint256 epoch) internal {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
+
+    if (!roundData.isSettled) return;
+
+    // Calculate user's claimable shares for this epoch
+    uint256 claimableShares = _calculateClaimableForEpoch(user, epoch, false);
+    if (claimableShares == 0) return;
+
+    // Calculate assets to transfer using epoch-specific share price
+    uint256 grossAssets = (claimableShares * roundData.sharePrice) / (10 ** decimals());
+
+    // Calculate and charge performance fee for this redemption
+    uint256 performanceFeeAmount = _calculateAndChargePerformanceFee(
+      user,
+      claimableShares,
+      roundData.sharePrice
+    );
+
+    // Apply exit cost - user receives net amount after fee deduction
+    uint256 exitCostAmount = _costOnTotal(grossAssets, exitCost());
+    uint256 netAssets = grossAssets - exitCostAmount - performanceFeeAmount;
+
+    // Track accumulated fees (exit cost only, performance fees already tracked)
+    $.accumulatedFees += exitCostAmount;
+
+    // Update claimed amounts
+    roundData.claimedRedeemShares += claimableShares;
+    $.userEpochClaimedRedeemShares[user][epoch] += claimableShares;
+
+    // Transfer assets to user (controller = receiver in auto-processing)
+    IERC20(asset()).safeTransfer(user, netAssets);
+
+    // Emit withdrawal event
+    emit Withdraw(address(this), user, user, netAssets, claimableShares);
+  }
+
+  /// @notice Auto-process a single user's deposit requests for the given epoch
+  /// @param user The user address to process
+  /// @param epoch The epoch to process
+  function _autoProcessUserDeposit(address user, uint256 epoch) internal {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
+
+    if (!roundData.isSettled) return;
+
+    // Calculate user's claimable assets for this epoch
+    uint256 claimableAssets = _calculateClaimableForEpoch(user, epoch, true);
+    if (claimableAssets == 0) return;
+
+    // Calculate shares to mint using epoch-specific share price
+    uint256 sharesToMint = (claimableAssets * (10 ** decimals())) / roundData.sharePrice;
+
+    // Update WAEP for the user with epoch-specific share price
+    _updateUserWAEP(user, sharesToMint, roundData.sharePrice);
+
+    // Update claimed amounts
+    roundData.claimedDepositAssets += claimableAssets;
+    $.userEpochClaimedDepositAssets[user][epoch] += claimableAssets;
+
+    // Mint shares to user (controller = receiver in auto-processing)
+    _mint(user, sharesToMint);
+
+    // Emit deposit event
+    emit Deposit(user, user, claimableAssets, sharesToMint);
+  }
+
+  /// @notice Signal strategy about idle asset utilization opportunity
+  function _notifyStrategyForUtilization() internal {
+    // Strategy's keeperRebalance is only callable by operator
+    // Emit event for keeper to detect and trigger rebalancing
+    emit StrategyUtilizationNeeded(idleAssets());
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                    AUTO-PROCESSING HELPER FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice Add user to epoch deposit users list (avoiding duplicates)
+  /// @param user The user address to add
+  /// @param epoch The epoch to add the user to
+  function _addUserToEpochDepositList(address user, uint256 epoch) internal {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    address[] storage epochUsers = $.epochDepositUsers[epoch];
+
+    // Check if user already exists in the list to avoid duplicates
+    for (uint256 i = 0; i < epochUsers.length; i++) {
+      if (epochUsers[i] == user) {
+        return; // User already exists, no need to add
+      }
+    }
+
+    // Add user to the list
+    epochUsers.push(user);
+  }
+
+  /// @notice Add user to epoch redeem users list (avoiding duplicates)
+  /// @param user The user address to add
+  /// @param epoch The epoch to add the user to
+  function _addUserToEpochRedeemList(address user, uint256 epoch) internal {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    address[] storage epochUsers = $.epochRedeemUsers[epoch];
+
+    // Check if user already exists in the list to avoid duplicates
+    for (uint256 i = 0; i < epochUsers.length; i++) {
+      if (epochUsers[i] == user) {
+        return; // User already exists, no need to add
+      }
+    }
+
+    // Add user to the list
+    epochUsers.push(user);
+  }
+
+  /// @notice Get list of users who made deposit requests in an epoch
+  /// @param epoch The epoch to query
+  /// @return users Array of user addresses
+  function getEpochDepositUsers(uint256 epoch) external view returns (address[] memory) {
+    return GenesisVaultStorage.layout().epochDepositUsers[epoch];
+  }
+
+  /// @notice Get list of users who made redeem requests in an epoch
+  /// @param epoch The epoch to query
+  /// @return users Array of user addresses
+  function getEpochRedeemUsers(uint256 epoch) external view returns (address[] memory) {
+    return GenesisVaultStorage.layout().epochRedeemUsers[epoch];
   }
 
   /// @dev Calculates the cost part of an amount `assets` that already includes cost.
@@ -1422,13 +1633,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   /// @notice The address of strategy that uses the underlying asset of this vault.
   function strategy() public view returns (address) {
     return GenesisVaultStorage.layout().strategy;
-  }
-
-  /// @notice The prioritized accounts.
-  /// For example, the addresses of logarithm meta vaults are prioritized to withdraw.
-  /// Prioritizing of withdraw means that their withdraw requests are processed before the other normal withdraw requests.
-  function prioritizedAccounts() public view returns (address[] memory) {
-    return GenesisVaultStorage.layout().prioritizedAccounts;
   }
 
   /// @notice The entry cost percent that is charged when depositing.
@@ -1460,8 +1664,90 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     return GenesisVaultStorage.layout().baseVolContract;
   }
 
-  function epochData(uint256 epoch) public view returns (GenesisVaultStorage.EpochData memory) {
+  function roundData(uint256 epoch) public view returns (GenesisVaultStorage.RoundData memory) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    return $.epochData[epoch];
+    return $.roundData[epoch];
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                      USER-BASED PERFORMANCE FEE LOGIC
+  //////////////////////////////////////////////////////////////*/
+
+  /// @dev Updates user's WAEP on deposit
+  /// @param user The user address
+  /// @param newShares The amount of new shares being deposited
+  /// @param currentSharePrice The current share price (scaled by share decimals)
+  function _updateUserWAEP(address user, uint256 newShares, uint256 currentSharePrice) internal {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.UserPerformanceData storage userData = $.userPerformanceData[user];
+
+    uint256 currentShares = balanceOf(user) - newShares; // Shares before this deposit
+
+    if (currentShares == 0) {
+      // First deposit: WAEP = current share price
+      userData.waep = currentSharePrice;
+    } else {
+      // Weighted average calculation
+      // WAEP_new = (WAEP_prev × shares_prev + sharePrice_current × shares_new) / (shares_prev + shares_new)
+      userData.waep =
+        (userData.waep * currentShares + currentSharePrice * newShares) /
+        (currentShares + newShares);
+    }
+
+    userData.totalShares = currentShares + newShares;
+    userData.lastUpdateEpoch = getCurrentEpoch();
+  }
+
+  /// @dev Calculates and charges performance fee on withdrawal
+  /// @param user The user address
+  /// @param withdrawShares The amount of shares being withdrawn
+  /// @param currentSharePrice The current share price (scaled by share decimals)
+  /// @return feeAmount The performance fee amount in assets
+  function _calculateAndChargePerformanceFee(
+    address user,
+    uint256 withdrawShares,
+    uint256 currentSharePrice
+  ) internal returns (uint256 feeAmount) {
+    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
+    GenesisVaultStorage.UserPerformanceData storage userData = $.userPerformanceData[user];
+
+    // WAEP not set (migration case)
+    if (userData.waep == 0) {
+      userData.waep = currentSharePrice; // Initialize with current price
+      return 0; // No fee on first withdrawal after migration
+    }
+
+    // Calculate profit only if current price > WAEP
+    if (currentSharePrice > userData.waep) {
+      uint256 profitPerShare = currentSharePrice - userData.waep;
+      uint256 totalProfit = (profitPerShare * withdrawShares) / (10 ** decimals());
+
+      // Calculate performance fee (20%)
+      feeAmount = (totalProfit * performanceFee()) / FLOAT_PRECISION;
+
+      // Accumulate fees
+      $.accumulatedFees += feeAmount;
+
+      emit PerformanceFeeCharged(user, feeAmount, currentSharePrice, userData.waep);
+    }
+
+    // Update user data (WAEP remains unchanged for withdrawals)
+    userData.totalShares = balanceOf(user) - withdrawShares;
+
+    return feeAmount;
+  }
+
+  /// @notice Get user's WAEP data
+  /// @param user The user address
+  /// @return waep The user's weighted average entry price
+  /// @return totalShares The user's total shares tracked
+  /// @return lastUpdateEpoch The last epoch when data was updated
+  function getUserPerformanceData(
+    address user
+  ) external view returns (uint256 waep, uint256 totalShares, uint256 lastUpdateEpoch) {
+    GenesisVaultStorage.UserPerformanceData storage userData = GenesisVaultStorage
+      .layout()
+      .userPerformanceData[user];
+    return (userData.waep, userData.totalShares, userData.lastUpdateEpoch);
   }
 }

@@ -129,7 +129,6 @@ abstract contract GenesisManagedVault is
     require(_feeRecipient != address(0));
     require(_managementFee <= MAX_MANAGEMENT_FEE);
     require(_performanceFee <= MAX_PERFORMANCE_FEE);
-    _harvestPerformanceFeeShares();
 
     GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
     if (feeRecipient() != _feeRecipient) {
@@ -229,7 +228,6 @@ abstract contract GenesisManagedVault is
     uint256 assets,
     uint256 shares
   ) internal virtual override {
-    _updateHwmDeposit(assets);
     super._deposit(caller, receiver, assets, shares);
   }
 
@@ -243,7 +241,6 @@ abstract contract GenesisManagedVault is
     uint256 assets,
     uint256 shares
   ) internal virtual override {
-    _updateHwmWithdraw(shares);
     super._withdraw(caller, receiver, owner, assets, shares);
   }
 
@@ -278,48 +275,6 @@ abstract contract GenesisManagedVault is
   /*//////////////////////////////////////////////////////////////
                            FEE LOGIC FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-
-  function _harvestPerformanceFeeShares() internal {
-    address _feeRecipient = feeRecipient();
-    uint256 _performanceFee = performanceFee();
-    uint256 _hwm = highWaterMark();
-    uint256 _totalAssets = totalAssets();
-    uint256 totalSupplyWithManagementFeeShares = _totalSupplyWithManagementFeeShares(_feeRecipient);
-    uint256 _lastHarvestedTimestamp = lastHarvestedTimestamp();
-    uint256 feeShares = _calcPerformanceFeeShares(
-      _performanceFee,
-      _hwm,
-      _totalAssets,
-      totalSupplyWithManagementFeeShares,
-      _lastHarvestedTimestamp
-    );
-
-    // reset performance fee calculation
-    uint256 newHwm = _totalAssets > _hwm ? _totalAssets : _hwm;
-    GenesisVaultManagedVaultStorage.layout().lastHarvestedTimestamp = block.timestamp;
-    GenesisVaultManagedVaultStorage.layout().hwm = newHwm;
-
-    // mint performance fee shares
-    if (feeShares > 0) {
-      _mint(_feeRecipient, feeShares);
-      emit PerformanceFeeCollected(_feeRecipient, feeShares);
-    }
-  }
-
-  /// @dev Should be called whenever a deposit is made
-  function _updateHwmDeposit(uint256 assets) internal {
-    GenesisVaultManagedVaultStorage.layout().hwm = highWaterMark() + assets;
-  }
-
-  /// @dev Should be called before all withdrawals
-  function _updateHwmWithdraw(uint256 shares) internal {
-    uint256 oldTotalSupply = _totalSupplyWithManagementFeeShares(feeRecipient());
-    GenesisVaultManagedVaultStorage.layout().hwm = highWaterMark().mulDiv(
-      oldTotalSupply - shares,
-      oldTotalSupply,
-      Math.Rounding.Ceil
-    );
-  }
 
   /// @dev Should not be called when minting to fee recipient
   function _accrueManagementFeeShares(address _feeRecipient) private {
@@ -364,44 +319,6 @@ abstract contract GenesisManagedVault is
     // should be rounded to bottom to stop generating 1 shares by calling accrueManagementFeeShares function
     uint256 managementFeeShares = shares.mulDiv(accruedFee, FLOAT_PRECISION);
     return managementFeeShares;
-  }
-
-  /// @dev Calculates the claimable performance fee shares
-  function _calcPerformanceFeeShares(
-    uint256 _performanceFee,
-    uint256 _hwm,
-    uint256 _totalAssets,
-    uint256 _totalSupply,
-    uint256 _lastHarvestedTimestamp
-  ) private view returns (uint256) {
-    if (_performanceFee == 0 || _hwm == 0 || _lastHarvestedTimestamp == 0 || _totalAssets <= _hwm) {
-      return 0;
-    }
-    uint256 profit = _totalAssets - _hwm;
-    uint256 hurdleRateFraction = _calcFeeFraction(
-      hurdleRate(),
-      block.timestamp - _lastHarvestedTimestamp
-    );
-    uint256 hurdle = _hwm.mulDiv(hurdleRateFraction, FLOAT_PRECISION);
-    if (profit > hurdle) {
-      uint256 feeAssets = profit.mulDiv(_performanceFee, FLOAT_PRECISION);
-      // we guarantee that user's profit is not less than hurdle
-      if (profit - feeAssets < hurdle) {
-        feeAssets = profit - hurdle;
-      }
-      // feeAssets = previewRedeem(feeShares)
-      // previewRedeem = shares.mulDiv(totalAssets + 1, totalSupply + 10 ** _decimalsOffset, Math.Rounding.Floor);
-      // feeAssets = feeShares.mulDiv(totalAssets + 1, (totalSupplyBeforeFeeMint + feeShares) + 10 ** _decimalsOffset, Math.Rounding.Floor);
-      // feeShares = feeAssets.mulDiv(totalSupplyBeforeFeeMint + 10 ** _decimalsOffset, totalAssets + 1 - feeAssets, Math.Rounding.Ceil);
-      uint256 feeShares = feeAssets.mulDiv(
-        _totalSupply + 10 ** _decimalsOffset(),
-        _totalAssets + 1 - feeAssets,
-        Math.Rounding.Ceil
-      );
-      return feeShares;
-    } else {
-      return 0;
-    }
   }
 
   /// @dev The total supply of shares including the next management fee shares.
@@ -475,16 +392,6 @@ abstract contract GenesisManagedVault is
   /// @notice The last accrued block.timestamp when the management was accrued.
   function lastAccruedTimestamp() public view returns (uint256) {
     return GenesisVaultManagedVaultStorage.layout().lastAccruedTimestamp;
-  }
-
-  /// @notice The high water mark of total assets where the performance fee was collected.
-  function highWaterMark() public view returns (uint256) {
-    return GenesisVaultManagedVaultStorage.layout().hwm;
-  }
-
-  /// @notice The last block.timestamp when the performance fee was harvested.
-  function lastHarvestedTimestamp() public view returns (uint256) {
-    return GenesisVaultManagedVaultStorage.layout().lastHarvestedTimestamp;
   }
 
   /// @notice The address of a white list provider who provides users allowed to use the vault.
