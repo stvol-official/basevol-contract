@@ -336,11 +336,11 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
     // Apply entry cost - only the net amount after fee goes to investment
-    uint256 entryCostAmount = _costOnTotal(assets, entryCost());
+    uint256 entryCostAmount = _calculateFixedCost(entryCost());
     uint256 netAssets = assets - entryCostAmount;
 
-    // Track accumulated fees using GenesisManagedVault function
-    _addAccumulatedFees(entryCostAmount);
+    // Transfer entry cost immediately to fee recipient
+    _transferFeesToRecipient(entryCostAmount, "entry");
 
     // Get current epoch from BaseVol system
     uint256 currentEpoch = getCurrentEpoch();
@@ -511,17 +511,15 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
   }
 
   /// @notice The underlying asset amount in this vault that is free to withdraw or utilize.
-  /// @dev Excludes accumulated fees and pending deposits which are not yet settled
+  /// @dev Excludes pending deposits which are not yet settled
   function idleAssets() public view returns (uint256) {
     uint256 totalBalance = IERC20(asset()).balanceOf(address(this));
-    uint256 fees = accumulatedFees();
 
     // Subtract total pending deposits (not yet settled)
     uint256 totalPendingDeposits = _totalPendingDeposits();
 
-    // Return total balance minus accumulated fees and pending deposits
-    uint256 grossSettledAssets = totalBalance > fees ? totalBalance - fees : 0;
-    (, uint256 settledAssets) = grossSettledAssets.trySub(totalPendingDeposits);
+    // Return total balance minus pending deposits
+    (, uint256 settledAssets) = totalBalance.trySub(totalPendingDeposits);
 
     return settledAssets;
   }
@@ -692,16 +690,9 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
     // Calculate gross assets needed to get desired net assets after exit cost
-    // net = gross - (gross * exitCost / FLOAT_PRECISION)
-    // net = gross * (1 - exitCost / FLOAT_PRECISION)
-    // gross = net / (1 - exitCost / FLOAT_PRECISION)
-    uint256 exitCostRate = exitCost();
-    uint256 grossAssetsNeeded;
-    if (exitCostRate > 0) {
-      grossAssetsNeeded = (assets * FLOAT_PRECISION) / (FLOAT_PRECISION - exitCostRate);
-    } else {
-      grossAssetsNeeded = assets;
-    }
+    // For fixed cost: gross = net + fixedCost
+    uint256 exitCostAmount = _calculateFixedCost(exitCost());
+    uint256 grossAssetsNeeded = assets + exitCostAmount;
 
     // Epoch-based: Calculate total claimable across all epochs
     uint256 totalClaimable = _calculateClaimableRedeemAssetsAcrossEpochs(controller);
@@ -752,8 +743,7 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     shares = totalShares;
 
     // Apply exit cost to gross assets
-    uint256 exitCostAmount = _costOnTotal(grossAssetsNeeded, exitCostRate);
-    _addAccumulatedFees(exitCostAmount);
+    _transferFeesToRecipient(exitCostAmount, "exit");
 
     // Final amount = gross assets - exit cost - performance fees
     uint256 finalAmount = grossAssetsNeeded - exitCostAmount - totalPerformanceFees;
@@ -823,11 +813,11 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     }
 
     // Apply exit cost - user receives net amount after fee deduction
-    uint256 exitCostAmount = _costOnTotal(totalAssetsRedeemed, exitCost());
+    uint256 exitCostAmount = _calculateFixedCost(exitCost());
     assets = totalAssetsRedeemed - exitCostAmount - totalPerformanceFees;
 
-    // Track accumulated fees (exit cost only, performance fees already tracked)
-    _addAccumulatedFees(exitCostAmount);
+    // Transfer exit cost immediately to fee recipient
+    _transferFeesToRecipient(exitCostAmount, "exit");
 
     IERC20(asset()).safeTransfer(receiver, assets);
 
@@ -1490,11 +1480,11 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     );
 
     // Apply exit cost - user receives net amount after fee deduction
-    uint256 exitCostAmount = _costOnTotal(grossAssets, exitCost());
+    uint256 exitCostAmount = _calculateFixedCost(exitCost());
     uint256 netAssets = grossAssets - exitCostAmount - performanceFeeAmount;
 
-    // Track accumulated fees (exit cost only, performance fees already tracked)
-    _addAccumulatedFees(exitCostAmount);
+    // Transfer exit cost immediately to fee recipient
+    _transferFeesToRecipient(exitCostAmount, "exit");
 
     // Update claimed amounts
     roundData.claimedRedeemShares += claimableShares;

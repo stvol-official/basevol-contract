@@ -22,8 +22,6 @@ library GenesisVaultManagedVaultStorage {
     uint256 lastFeeTimestamp;
     /// @dev Total management fees collected (in shares)
     uint256 totalFeesCollected;
-    /// @dev Address to receive management fees (address(0) means vault itself)
-    address feeRecipient;
   }
 
   struct Layout {
@@ -39,15 +37,15 @@ library GenesisVaultManagedVaultStorage {
     uint256 userDepositLimit;
     // deposit limit in assets for this vault
     uint256 vaultDepositLimit;
-    // Entry and exit costs
+    // Entry and exit costs (now fixed amounts)
     uint256 entryCost;
     uint256 exitCost;
-    // Accumulated fees
-    uint256 accumulatedFees;
     // User-based performance fee tracking
     mapping(address => UserPerformanceData) userPerformanceData;
     // Management fee data
     ManagementFeeData managementFeeData;
+    // Fee recipient for all fees (entry, exit, performance)
+    address feeRecipient;
     /* IMPROTANT: you can add new variables here */
   }
 
