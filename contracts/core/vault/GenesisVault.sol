@@ -66,6 +66,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   event KeeperAdded(address indexed keeper);
   event KeeperRemoved(address indexed keeper);
 
+  // Strategy interaction events
+  event StrategyLiquidityRequestFailed(uint256 requestedAmount, string reason);
+
   // ERC7540 Events (use OpenZeppelin's Withdraw/Redeem events)
 
   /// @notice Modifier to restrict access to keepers only
@@ -256,8 +259,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     // 2. utilized assets should be zero that means all requests have been processed.
     // 3. All assets should be withdrawn from strategy and no pending requests should remain.
     require(totalSupply() == 0 && IGenesisStrategy(strategy()).utilizedAssets() == 0);
-
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
     // sweep idle assets
     IERC20(asset()).safeTransfer(receiver, idleAssets());
@@ -1442,16 +1443,65 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   /// @param amount Required liquidity amount
   function _requestLiquidityFromStrategy(uint256 amount) internal {
     address strategyAddr = strategy();
-    if (strategyAddr == address(0)) return;
+    if (strategyAddr == address(0)) {
+      emit StrategyLiquidityRequestFailed(amount, "Strategy not set");
+      return;
+    }
 
-    // Currently only able to get idle balance from strategy
-    // Process only if strategy is active
-    try IGenesisStrategy(strategyAddr).processAssetsToWithdraw() {
+    // Request specific amount of liquidity from strategy
+    // Strategy will intelligently source from: 1) idle assets, 2) BaseVol, 3) Morpho
+    try IGenesisStrategy(strategyAddr).provideLiquidityForWithdrawals(amount) {
       emit StrategyLiquidityRequested(amount);
-    } catch {
+    } catch Error(string memory reason) {
       // Strategy call failure should not stop vault settlement
-      // Log event and let next keeper rebalance handle it
-      // TODO: Add more sophisticated error handling if needed
+      // Fallback to basic asset processing
+      try IGenesisStrategy(strategyAddr).processAssetsToWithdraw() {
+        emit StrategyLiquidityRequested(amount);
+        emit StrategyLiquidityRequestFailed(
+          amount,
+          string(abi.encodePacked("Primary method failed: ", reason, " - Used fallback"))
+        );
+      } catch Error(string memory fallbackReason) {
+        // Both methods failed - log the failures and continue
+        emit StrategyLiquidityRequestFailed(
+          amount,
+          string(
+            abi.encodePacked(
+              "Both methods failed - Primary: ",
+              reason,
+              " Fallback: ",
+              fallbackReason
+            )
+          )
+        );
+      } catch {
+        // Fallback method failed with unknown error
+        emit StrategyLiquidityRequestFailed(
+          amount,
+          string(abi.encodePacked("Primary failed: ", reason, " - Fallback failed: Unknown error"))
+        );
+      }
+    } catch {
+      // Primary method failed with unknown error - try fallback
+      try IGenesisStrategy(strategyAddr).processAssetsToWithdraw() {
+        emit StrategyLiquidityRequested(amount);
+        emit StrategyLiquidityRequestFailed(
+          amount,
+          "Primary method failed: Unknown error - Used fallback"
+        );
+      } catch Error(string memory fallbackReason) {
+        emit StrategyLiquidityRequestFailed(
+          amount,
+          string(
+            abi.encodePacked(
+              "Both methods failed - Primary: Unknown error, Fallback: ",
+              fallbackReason
+            )
+          )
+        );
+      } catch {
+        emit StrategyLiquidityRequestFailed(amount, "Both methods failed with unknown errors");
+      }
     }
   }
 

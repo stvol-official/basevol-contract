@@ -33,12 +33,13 @@ library GenesisStrategyStorage {
     uint256 maxUtilizePct;
     uint256 utilizedAssets;
     uint256 strategyBalance;
-    
     // Rebalancing configuration
     uint256 morphoTargetPct; // Target percentage for Morpho (e.g., 90% = 0.9 ether)
     uint256 baseVolTargetPct; // Target percentage for BaseVol (e.g., 10% = 0.1 ether)
     uint256 rebalanceThreshold; // Threshold for triggering rebalancing (e.g., 5% = 0.05 ether)
-    
+    // Withdrawal coordination
+    uint256 pendingWithdrawAmount; // Amount still needed to fulfill vault withdrawal request
+
     /* IMPORTANT: you can add new variables here */
   }
 

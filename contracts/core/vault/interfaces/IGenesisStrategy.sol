@@ -56,6 +56,13 @@ interface IGenesisStrategy {
   function processAssetsToWithdraw() external;
 
   /**
+   * @notice Provides liquidity for vault withdrawal requests by intelligently sourcing from available assets
+   * @dev Only callable by vault. Attempts to fulfill request from: 1) idle assets, 2) BaseVol, 3) Morpho
+   * @param amountNeeded The amount of liquidity needed by the vault
+   */
+  function provideLiquidityForWithdrawals(uint256 amountNeeded) external;
+
+  /**
    * @notice Callback function called when a deposit operation completes
    * @param amount The amount that was deposited
    * @param success Whether the deposit operation was successful

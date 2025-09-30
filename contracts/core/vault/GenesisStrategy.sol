@@ -315,6 +315,88 @@ contract GenesisStrategy is
     }
   }
 
+  /// @notice Provides liquidity for vault withdrawal requests by intelligently sourcing from available assets
+  /// @dev Only callable by vault. Attempts to fulfill request from: 1) idle assets, 2) BaseVol, 3) Morpho
+  /// @param amountNeeded The amount of liquidity needed by the vault
+  function provideLiquidityForWithdrawals(
+    uint256 amountNeeded
+  ) external authCaller(vault()) whenIdle nonReentrant {
+    if (amountNeeded == 0) return;
+
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    uint256 remaining = amountNeeded;
+
+    // Step 1: Use idle assets first (most liquid)
+    uint256 idleBalance = assetsToWithdraw();
+    if (remaining > 0 && idleBalance > 0) {
+      uint256 fromIdle = Math.min(remaining, idleBalance);
+      IERC20(asset()).safeTransfer(vault(), fromIdle);
+      remaining -= fromIdle;
+      emit DebugLog(string(abi.encodePacked("Provided from idle: ", fromIdle.toString())));
+    }
+
+    // If fully satisfied from idle assets, we're done
+    if (remaining == 0) {
+      emit DebugLog("Withdrawal request fully satisfied from idle assets");
+      return;
+    }
+
+    // Store the total remaining amount that needs to be fulfilled
+    $.pendingWithdrawAmount = remaining;
+
+    // Step 2: Check what's available from both sources
+    uint256 baseVolAvailable = 0;
+    uint256 morphoAvailable = 0;
+
+    if (address($.baseVolManager) != address(0)) {
+      baseVolAvailable = getBaseVolAssets();
+    }
+
+    if (address($.morphoVaultManager) != address(0)) {
+      morphoAvailable = getMorphoAssets();
+    }
+
+    // Start with BaseVol if available (higher liquidity)
+    if (baseVolAvailable > 0) {
+      uint256 fromBaseVol = Math.min(remaining, baseVolAvailable);
+
+      _setStrategyStatus(StrategyStatus.DEUTILIZING);
+      $.baseVolManager.withdrawFromClearingHouse(fromBaseVol);
+
+      emit DebugLog(
+        string(
+          abi.encodePacked(
+            "Requesting from BaseVol: ",
+            fromBaseVol.toString(),
+            " (total needed: ",
+            remaining.toString(),
+            ", morpho available: ",
+            morphoAvailable.toString(),
+            ")"
+          )
+        )
+      );
+
+      // Callback will handle continuing to Morpho if needed
+      return;
+    } else if (morphoAvailable > 0) {
+      // Only Morpho available, go directly there
+      uint256 fromMorpho = Math.min(remaining, morphoAvailable);
+
+      _setStrategyStatus(StrategyStatus.DEUTILIZING);
+      $.morphoVaultManager.withdrawFromMorpho(fromMorpho);
+
+      emit DebugLog(string(abi.encodePacked("Requesting from Morpho: ", fromMorpho.toString())));
+      return;
+    } else {
+      // No additional assets available
+      $.pendingWithdrawAmount = 0; // Clear since we can't fulfill
+      emit DebugLog(
+        string(abi.encodePacked("Could not fulfill remaining: ", remaining.toString()))
+      );
+    }
+  }
+
   /// @notice Sets the BaseVolManager.
   function setBaseVolManager(address newBaseVolManager) external onlyOwner {
     if (baseVolManager() != newBaseVolManager) {
@@ -889,8 +971,56 @@ contract GenesisStrategy is
         }
       }
 
-      // Normal operation: transfer assets back to vault
-      IERC20(asset()).safeTransfer(address(vault()), amount);
+      // Check if this is part of a vault withdrawal request
+      uint256 remainingNeeded = $.pendingWithdrawAmount;
+      if (remainingNeeded > 0) {
+        // Transfer to vault first
+        IERC20(asset()).safeTransfer(address(vault()), amount);
+
+        // Calculate how much we still need after this withdrawal
+        uint256 stillNeeded = remainingNeeded > amount ? remainingNeeded - amount : 0;
+
+        // Continue with Morpho if still need more
+        if (stillNeeded > 0 && address($.morphoVaultManager) != address(0)) {
+          uint256 morphoAvailable = getMorphoAssets();
+          if (morphoAvailable > 0) {
+            uint256 fromMorpho = Math.min(stillNeeded, morphoAvailable);
+            $.pendingWithdrawAmount = stillNeeded - fromMorpho; // Update remaining needed
+            $.morphoVaultManager.withdrawFromMorpho(fromMorpho);
+            emit DebugLog(
+              string(
+                abi.encodePacked(
+                  "Continuing to Morpho: ",
+                  fromMorpho.toString(),
+                  " (still needed after: ",
+                  (stillNeeded - fromMorpho).toString(),
+                  ")"
+                )
+              )
+            );
+            return; // Will continue in morphoWithdrawCompletedCallback
+          }
+        }
+
+        // Clear pending amount as we're done (either fulfilled or no more sources)
+        $.pendingWithdrawAmount = 0;
+        if (stillNeeded > 0) {
+          emit DebugLog(
+            string(
+              abi.encodePacked(
+                "Withdrawal partially fulfilled from BaseVol. Unfulfilled: ",
+                stillNeeded.toString()
+              )
+            )
+          );
+        } else {
+          emit DebugLog("Withdrawal request fully fulfilled from BaseVol");
+        }
+      } else {
+        // Normal operation: transfer assets back to vault
+        IERC20(asset()).safeTransfer(address(vault()), amount);
+      }
+
       emit Deutilize(_msgSender(), 0, amount);
     }
 
@@ -920,6 +1050,35 @@ contract GenesisStrategy is
         return; // Don't emit normal events during rebalancing
       }
 
+      // Check if this is part of a vault withdrawal request
+      uint256 remainingNeeded = $.pendingWithdrawAmount;
+      if (remainingNeeded > 0) {
+        // Transfer to vault for withdrawal request
+        IERC20(asset()).safeTransfer(address(vault()), amount);
+
+        // Calculate if we still need more (should be 0 or very small)
+        uint256 stillNeeded = remainingNeeded > amount ? remainingNeeded - amount : 0;
+        $.pendingWithdrawAmount = 0; // Clear as Morpho is typically the final step
+
+        if (stillNeeded > 0) {
+          emit DebugLog(
+            string(
+              abi.encodePacked(
+                "Withdrawal request partially fulfilled from Morpho. Unfulfilled: ",
+                stillNeeded.toString()
+              )
+            )
+          );
+        } else {
+          emit DebugLog("Withdrawal request fully fulfilled from Morpho");
+        }
+      } else {
+        // Normal operation: this shouldn't happen for Morpho in current design
+        // but handle it gracefully
+        IERC20(asset()).safeTransfer(address(vault()), amount);
+        emit DebugLog("Morpho withdrawal outside of vault request");
+      }
+
       emit MorphoDeutilize(_msgSender(), amount);
     }
 
@@ -930,6 +1089,8 @@ contract GenesisStrategy is
 
     if (!success) {
       emit DebugLog("Morpho withdraw operation failed");
+      // Clear pending amount on failure
+      $.pendingWithdrawAmount = 0;
     }
   }
 }
