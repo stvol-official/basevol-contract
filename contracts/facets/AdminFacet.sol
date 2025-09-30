@@ -34,6 +34,15 @@ contract AdminFacet {
     _;
   }
 
+  function transferOwnership(address _newOwner) external onlyOwner {
+    if (_newOwner == address(0)) revert LibBaseVolStrike.InvalidAddress();
+    LibDiamond.setContractOwner(_newOwner);
+  }
+
+  function owner() external view returns (address) {
+    return LibDiamond.contractOwner();
+  }
+
   function setPythLazer(address _pythLazer) external onlyAdmin {
     if (_pythLazer == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();

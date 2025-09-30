@@ -849,6 +849,7 @@ contract ClearingHouse is
 
       $.userBalances[user] -= remainingAmount;
       $.productEscrowBalances[product][epoch][user][idx] += remainingAmount;
+      $.userEscrowBalances[user] += remainingAmount;
       if ($.vaultManager.isVault(product, user)) {
         $.vaultManager.subtractVaultBalance(product, user, remainingAmount);
       }
@@ -972,6 +973,7 @@ contract ClearingHouse is
     uint256 balanceAmount = $.productEscrowBalances[product][epoch][user][idx];
     if (balanceAmount > 0) {
       $.userBalances[user] += amountAfterFee;
+      $.userEscrowBalances[user] -= balanceAmount;
       if (fee > 0) {
         $.treasuryAmount += fee;
       }
@@ -1014,6 +1016,7 @@ contract ClearingHouse is
       if ($.productEscrowBalances[product][epoch][loser][idx] < remainingAmount)
         revert InsufficientBalance();
       $.productEscrowBalances[product][epoch][loser][idx] -= remainingAmount;
+      $.userEscrowBalances[loser] -= remainingAmount;
     }
 
     // Transfer amount after fee to winner
@@ -1070,5 +1073,15 @@ contract ClearingHouse is
     $.userBalances[msg.sender] -= amount;
     $.token.safeTransfer(msg.sender, amount);
     emit Withdraw(msg.sender, amount, $.userBalances[msg.sender]);
+  }
+
+  function totalUserBalances(address user) external view returns (uint256) {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    return $.userBalances[user] + $.userEscrowBalances[user];
+  }
+
+  function userEscrowBalances(address user) external view returns (uint256) {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    return $.userEscrowBalances[user];
   }
 }

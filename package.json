@@ -7,6 +7,7 @@
   "private": true,
   "scripts": {
     "compile": "npx hardhat compile",
+    "check-secrets": "node scripts/check-secrets.js",
     "deploy:clearing-house:testnet": "npx hardhat run --network base_sepolia scripts/deploy-clearing-house.ts",
     "deploy:vault:testnet": "npx hardhat run --network base_sepolia scripts/deploy-vault.ts",
     "deploy:basevol-1hour:testnet": "npx hardhat run --network base_sepolia scripts/deploy-basevol-1hour.ts",
@@ -15,7 +16,8 @@
     "deploy:vault:mainnet": "npx hardhat run --network base scripts/deploy-vault.ts",
     "deploy:basevol-1hour:mainnet": "npx hardhat run --network base scripts/deploy-basevol-1hour.ts",
     "deploy:basevol-1min:mainnet": "npx hardhat run --network base scripts/deploy-basevol-1min.ts",
-    "test": "npx hardhat test"
+    "test": "npx hardhat test",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@chainlink/contracts": "^1.0.0",
@@ -30,7 +32,7 @@
     "@types/mocha": "^10.0.6",
     "eslint": "^8.57.0",
     "hardhat": "^2.22.2",
-    "husky": "^9.0.11",
+    "husky": "^9.1.7",
     "solidity-coverage": "^0.8.11",
     "ts-node": "^10.9.2",
     "typechain": "^8.3.2",
