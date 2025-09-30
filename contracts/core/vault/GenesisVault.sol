@@ -31,7 +31,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   uint256 constant MAX_COST = 0.10 ether; // 10%
 
   event Shutdown(address account);
-  event AdminUpdated(address indexed account, address indexed newAdmin);
   event StrategyUpdated(address account, address newStrategy);
   event EntryCostUpdated(address account, uint256 newEntryCost);
   event ExitCostUpdated(address account, uint256 newExitCost);
@@ -72,13 +71,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
   // ERC7540 Events (use OpenZeppelin's Withdraw/Redeem events)
 
-  modifier onlyAdmin() {
-    if (_msgSender() != admin()) {
-      revert OnlyAdmin();
-    }
-    _;
-  }
-
   function initialize(
     address baseVolContract_,
     address asset_,
@@ -87,7 +79,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     string calldata name_,
     string calldata symbol_
   ) external initializer {
-    __GenesisManagedVault_init(msg.sender, asset_, name_, symbol_);
+    __GenesisManagedVault_init(msg.sender, msg.sender, asset_, name_, symbol_);
     require(entryCost_ <= MAX_COST, "Entry cost too high");
     require(exitCost_ <= MAX_COST, "Exit cost too high");
 
@@ -158,20 +150,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   function setBaseVolContract(address _baseVolContract) external onlyOwner {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
     $.baseVolContract = _baseVolContract;
-  }
-
-  /*//////////////////////////////////////////////////////////////
-                        ADMIN FUNCTIONS   
-    //////////////////////////////////////////////////////////////*/
-
-  /// @notice Configures the admin.
-  ///
-  /// @param account The address of new admin.
-  /// A zero address means disabling admin functions.
-  function setAdmin(address account) external onlyOwner {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    $.admin = account;
-    emit AdminUpdated(_msgSender(), account);
   }
 
   /// @notice Configures the strategy.
@@ -1465,11 +1443,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   /// @dev Denominated in 18 decimals.
   function exitCost() public view returns (uint256) {
     return GenesisVaultStorage.layout().exitCost;
-  }
-
-  /// @notice The address of admin who is responsible for pausing/unpausing vault.
-  function admin() public view returns (address) {
-    return GenesisVaultStorage.layout().admin;
   }
 
   /// @notice When this vault is shutdown, only withdrawals are available. It can't be reverted.

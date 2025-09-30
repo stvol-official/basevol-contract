@@ -73,6 +73,21 @@ contract ClearingHouse is
   );
   event DebugLog(string message);
 
+  event BaseVolManagerDeposit(address indexed token, uint256 amount);
+  event BaseVolManagerDepositWithData(
+    address indexed token,
+    uint256 amount,
+    string reason,
+    uint256 timestamp
+  );
+  event BaseVolManagerWithdraw(address indexed token, uint256 amount);
+  event BaseVolManagerWithdrawWithData(
+    address indexed token,
+    uint256 amount,
+    string reason,
+    uint256 timestamp
+  );
+
   modifier onlyAdmin() {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     if (msg.sender != $.adminAddress) revert OnlyAdmin();
@@ -95,6 +110,12 @@ contract ClearingHouse is
   modifier onlyActiveProduct(address _product) {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     if (!$.products[_product].isActive) revert ProductNotActive();
+    _;
+  }
+
+  modifier onlyBaseVolManager() {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    if (!$.baseVolManagers[msg.sender]) revert OnlyBaseVolManager();
     _;
   }
 
@@ -480,6 +501,14 @@ contract ClearingHouse is
     $.operators[operator] = true;
     $.operatorList.push(operator);
   }
+  function addBaseVolManager(address baseVolManager) external onlyAdmin {
+    if (baseVolManager == address(0)) revert InvalidAddress();
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    if ($.baseVolManagers[baseVolManager]) revert BaseVolManagerAlreadyExists();
+
+    $.baseVolManagers[baseVolManager] = true;
+    $.baseVolManagerList.push(baseVolManager);
+  }
 
   function removeOperator(address operator) external onlyAdmin {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
@@ -488,6 +517,18 @@ contract ClearingHouse is
       if ($.operatorList[i] == operator) {
         $.operatorList[i] = $.operatorList[$.operatorList.length - 1];
         $.operatorList.pop();
+        break;
+      }
+    }
+  }
+
+  function removeBaseVolManager(address baseVolManager) external onlyAdmin {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    $.baseVolManagers[baseVolManager] = false;
+    for (uint i = 0; i < $.baseVolManagerList.length; i++) {
+      if ($.baseVolManagerList[i] == baseVolManager) {
+        $.baseVolManagerList[i] = $.baseVolManagerList[$.baseVolManagerList.length - 1];
+        $.baseVolManagerList.pop();
         break;
       }
     }
@@ -571,6 +612,11 @@ contract ClearingHouse is
   function getOperators() public view returns (address[] memory) {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     return $.operatorList;
+  }
+
+  function getBaseVolManagers() public view returns (address[] memory) {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    return $.baseVolManagerList;
   }
 
   function getForceWithdrawalDelay() external view returns (uint256) {
@@ -1008,6 +1054,25 @@ contract ClearingHouse is
   ) external view returns (uint256) {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     return $.productEscrowCoupons[product][epoch][user][idx];
+  }
+
+  /// @notice Deposit tokens to the clearing house only for baseVolManager
+  /// @param amount The amount of tokens to deposit
+  function baseVolManagerDeposit(uint256 amount) external onlyBaseVolManager nonReentrant {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    $.token.safeTransferFrom(msg.sender, address(this), amount);
+    $.userBalances[msg.sender] += amount;
+    emit Deposit(msg.sender, msg.sender, amount, $.userBalances[msg.sender]);
+  }
+
+  /// @notice Withdraw tokens from the clearing house only for baseVolManager
+  /// @param amount The amount of tokens to withdraw
+  function baseVolManagerWithdraw(uint256 amount) external onlyBaseVolManager nonReentrant {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    // withdrawalFee is not used for now
+    $.userBalances[msg.sender] -= amount;
+    $.token.safeTransfer(msg.sender, amount);
+    emit Withdraw(msg.sender, amount, $.userBalances[msg.sender]);
   }
 
   function totalUserBalances(address user) external view returns (uint256) {

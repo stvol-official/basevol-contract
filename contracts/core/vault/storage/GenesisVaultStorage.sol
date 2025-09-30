@@ -36,7 +36,6 @@ library GenesisVaultStorage {
     address strategy;
     uint256 entryCost;
     uint256 exitCost;
-    address admin;
     address[] prioritizedAccounts;
     bool shutdown;
     // Note: nextRequestId, depositRequests, redeemRequests removed

@@ -35,9 +35,9 @@ abstract contract BaseVolStrike is
   // Abstract functions
   function _getStartTimestamp() internal pure virtual returns (uint256);
   function _getIntervalSeconds() internal pure virtual returns (uint256);
-  function _getStorageSlot() internal pure virtual returns (bytes32);
+  function _getStorageSlot() internal view virtual returns (bytes32);
 
-  function _getStorage() internal pure returns (BaseVolStrikeStorage.Layout storage $) {
+  function _getStorage() internal view returns (BaseVolStrikeStorage.Layout storage $) {
     bytes32 slot = _getStorageSlot();
     assembly {
       $.slot := slot

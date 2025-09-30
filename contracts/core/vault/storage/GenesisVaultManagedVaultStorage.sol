@@ -9,6 +9,9 @@ library GenesisVaultManagedVaultStorage {
     0xcafa32707f311a92186c31e9dd38c386738c8cc0fbd78d451ab0dd57c3df5c00;
 
   struct Layout {
+    // admin
+    address admin;
+    // fee recipient
     address feeRecipient;
     // management fee
     uint256 managementFee;

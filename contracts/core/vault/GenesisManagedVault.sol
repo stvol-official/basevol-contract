@@ -12,7 +12,6 @@ import { ERC4626Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ER
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { GenesisVaultManagedVaultStorage } from "./storage/GenesisVaultManagedVaultStorage.sol";
 import { IGenesisVaultErrors } from "./errors/GenesisVaultErrors.sol";
-import { GenesisVaultStorage } from "./storage/GenesisVaultStorage.sol";
 
 /// @title BaseVolManagedVault
 ///
@@ -64,6 +63,9 @@ abstract contract GenesisManagedVault is
   /// @dev Emitted when a new whitelist provider is set.
   event WhitelistProviderChanged(address account, address newWhitelistProvider);
 
+  /// @dev Emitted when a new admin is set.
+  event AdminUpdated(address indexed account, address indexed newAdmin);
+
   /// @dev Modifier to restrict function access to admin only
   modifier onlyAdmin() {
     if (_msgSender() != admin()) {
@@ -79,6 +81,7 @@ abstract contract GenesisManagedVault is
 
   function __GenesisManagedVault_init(
     address owner_,
+    address admin_,
     address asset_,
     string calldata name_,
     string calldata symbol_
@@ -88,6 +91,7 @@ abstract contract GenesisManagedVault is
     __Pausable_init();
     __ERC20_init_unchained(name_, symbol_);
     __ERC4626_init_unchained(IERC20(asset_));
+    GenesisVaultManagedVaultStorage.layout().admin = admin_;
     _setDepositLimits(type(uint256).max, type(uint256).max);
   }
 
@@ -501,6 +505,16 @@ abstract contract GenesisManagedVault is
 
   /// @notice The address of admin who is responsible for operational management.
   function admin() public view returns (address) {
-    return GenesisVaultStorage.layout().admin;
+    return GenesisVaultManagedVaultStorage.layout().admin;
+  }
+
+  /// @notice Configures the admin.
+  ///
+  /// @param account The address of new admin.
+  /// A zero address means disabling admin functions.
+  function setAdmin(address account) external onlyOwner {
+    GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
+    $.admin = account;
+    emit AdminUpdated(_msgSender(), account);
   }
 }

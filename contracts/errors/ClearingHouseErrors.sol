@@ -16,5 +16,6 @@ interface IClearingHouseErrors is ICommonErrors {
   error BatchAlreadyProcessed();
   error ProductNotActive();
   error OperatorAlreadyExists();
+  error BaseVolManagerAlreadyExists();
   error AmountExceedsLimit();
 }
