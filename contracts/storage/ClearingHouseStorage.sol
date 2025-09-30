@@ -7,8 +7,12 @@ import { WithdrawalRequest, Coupon, ForceWithdrawalRequest, CouponUsageDetail, P
 
 library ClearingHouseStorage {
   // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.clearinghouse.secure")) - 1)) & ~bytes32(uint256(0xff));
-  bytes32 internal constant SLOT =
+  bytes32 internal constant SLOT_MAINNET =
     0x774c44a0b38ae921c4dec3ca94745bada9f891442f312f232ca295c24066bb00;
+
+  // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.clearinghouse")) - 1)) & ~bytes32(uint256(0xff));
+  bytes32 internal constant SLOT_TESTNET =
+    0x20427f0c61138b4eb4becfbfceaa6e34fbd8d2897b15f8cd4fe50ddc7b548700;
 
   struct Layout {
     IERC20 token; // Prediction token
@@ -33,13 +37,24 @@ library ClearingHouseStorage {
     mapping(address => mapping(uint256 => mapping(address => mapping(uint256 => uint256)))) productEscrowCoupons; // product => epoch => user => idx => amount
     mapping(address => Product) products; // product => Product
     address[] productAddresses; // product addresses
+    mapping(address => uint256) userEscrowBalances; // user => escrow balance
     /* IMPROTANT: you can add new variables here */
   }
 
-  function layout() internal pure returns (Layout storage $) {
-    bytes32 slot = SLOT;
+  function layout() internal view returns (Layout storage $) {
+    bytes32 slot = _getSlot();
     assembly {
       $.slot := slot
+    }
+  }
+  function _getSlot() internal view returns (bytes32) {
+    uint256 chainId = block.chainid;
+    if (chainId == 8453) {
+      return SLOT_MAINNET;
+    } else if (chainId == 84532) {
+      return SLOT_TESTNET;
+    } else {
+      return SLOT_TESTNET;
     }
   }
 }
