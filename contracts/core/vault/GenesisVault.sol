@@ -23,22 +23,14 @@ interface IBaseVol {
   function currentEpoch() external view returns (uint256);
 }
 
-contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
+contract GenesisVault is GenesisManagedVault, IERC7540 {
   using Math for uint256;
   using SafeERC20 for IERC20;
   using SafeCast for uint256;
 
-  uint256 constant MAX_COST = 0.10 ether; // 10%
-
   event Shutdown(address account);
   event StrategyUpdated(address account, address newStrategy);
-  event EntryCostUpdated(address account, uint256 newEntryCost);
-  event ExitCostUpdated(address account, uint256 newExitCost);
-  event MaxCostsUpdated(address account, uint256 newMaxEntryCost, uint256 newMaxExitCost);
-  event PriorityProviderUpdated(address account, address newPriorityProvider);
   event VaultState(uint256 indexed totalAssets, uint256 indexed totalSupply);
-  event PrioritizedAccountAdded(address indexed account);
-  event PrioritizedAccountRemoved(address indexed account);
 
   // Epoch-based events
   event RoundSettled(uint256 indexed epoch, uint256 sharePrice);
@@ -52,15 +44,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   );
   event StrategyLiquidityRequested(uint256 amount);
   event StrategyUtilizationNeeded(uint256 idleAssets);
-
-  // Fee-related events
-  event FeesWithdrawn(address indexed to, uint256 amount);
-  event PerformanceFeeCharged(
-    address indexed user,
-    uint256 feeAmount,
-    uint256 currentSharePrice,
-    uint256 userWAEP
-  );
 
   // Keeper-related events
   event KeeperAdded(address indexed keeper);
@@ -95,10 +78,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     string calldata symbol_
   ) external initializer {
     __GenesisManagedVault_init(msg.sender, msg.sender, asset_, name_, symbol_);
-    require(entryCost_ <= MAX_COST, "Entry cost too high");
-    require(exitCost_ <= MAX_COST, "Exit cost too high");
     require(initialKeeper_ != address(0), "GenesisVault: invalid initial keeper");
 
+    // Set entry and exit costs using GenesisManagedVault functions
     _setEntryCost(entryCost_);
     _setExitCost(exitCost_);
 
@@ -153,7 +135,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
     // Calculate share price based on vault's current state
-    uint256 sharePrice = _calculateRoundSharePrice(epoch);
+    uint256 sharePrice = _calculateCurrentSharePrice();
 
     roundData.sharePrice = sharePrice;
     roundData.isSettled = true;
@@ -162,6 +144,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // Process round settlement including liquidity management
     _processRoundSettlement(epoch);
+
+    // Process management fee
+    _mintManagementFeeShares();
   }
 
   /// @notice Set BaseVol contract address (only owner)
@@ -197,28 +182,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     _asset.approve(_strategy, type(uint256).max);
 
     emit StrategyUpdated(_msgSender(), _strategy);
-  }
-
-  /// @notice Configures new entry/exit cost setting.
-  function setEntryAndExitCost(uint256 newEntryCost, uint256 newExitCost) external onlyAdmin {
-    _setEntryCost(newEntryCost);
-    _setExitCost(newExitCost);
-  }
-
-  function _setEntryCost(uint256 value) internal {
-    require(value <= MAX_COST, "Entry cost exceeds maximum");
-    if (entryCost() != value) {
-      GenesisVaultStorage.layout().entryCost = value;
-      emit EntryCostUpdated(_msgSender(), value);
-    }
-  }
-
-  function _setExitCost(uint256 value) internal {
-    require(value <= MAX_COST, "Exit cost exceeds maximum");
-    if (exitCost() != value) {
-      GenesisVaultStorage.layout().exitCost = value;
-      emit ExitCostUpdated(_msgSender(), value);
-    }
   }
 
   /// @notice Shutdown vault, where all deposit/mint are disabled while withdraw/redeem are still available.
@@ -262,25 +225,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // sweep idle assets
     IERC20(asset()).safeTransfer(receiver, idleAssets());
-  }
-
-  /// @notice Withdraw accumulated fees (only admin)
-  /// @param to Address to receive the fees
-  /// @param amount Amount of fees to withdraw (0 = all)
-  function withdrawFees(address to, uint256 amount) external onlyAdmin {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-
-    uint256 availableFees = $.accumulatedFees;
-    require(availableFees > 0, "GenesisVault: no fees available");
-    require(to != address(0), "GenesisVault: invalid recipient");
-
-    uint256 withdrawAmount = amount == 0 ? availableFees : amount;
-    require(withdrawAmount <= availableFees, "GenesisVault: insufficient fees");
-
-    $.accumulatedFees -= withdrawAmount;
-    IERC20(asset()).safeTransfer(to, withdrawAmount);
-
-    emit FeesWithdrawn(to, withdrawAmount);
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -395,8 +339,8 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     uint256 entryCostAmount = _costOnTotal(assets, entryCost());
     uint256 netAssets = assets - entryCostAmount;
 
-    // Track accumulated fees
-    $.accumulatedFees += entryCostAmount;
+    // Track accumulated fees using GenesisManagedVault function
+    _addAccumulatedFees(entryCostAmount);
 
     // Get current epoch from BaseVol system
     uint256 currentEpoch = getCurrentEpoch();
@@ -569,9 +513,8 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   /// @notice The underlying asset amount in this vault that is free to withdraw or utilize.
   /// @dev Excludes accumulated fees and pending deposits which are not yet settled
   function idleAssets() public view returns (uint256) {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
     uint256 totalBalance = IERC20(asset()).balanceOf(address(this));
-    uint256 fees = $.accumulatedFees;
+    uint256 fees = accumulatedFees();
 
     // Subtract total pending deposits (not yet settled)
     uint256 totalPendingDeposits = _totalPendingDeposits();
@@ -810,7 +753,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // Apply exit cost to gross assets
     uint256 exitCostAmount = _costOnTotal(grossAssetsNeeded, exitCostRate);
-    $.accumulatedFees += exitCostAmount;
+    _addAccumulatedFees(exitCostAmount);
 
     // Final amount = gross assets - exit cost - performance fees
     uint256 finalAmount = grossAssetsNeeded - exitCostAmount - totalPerformanceFees;
@@ -884,7 +827,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     assets = totalAssetsRedeemed - exitCostAmount - totalPerformanceFees;
 
     // Track accumulated fees (exit cost only, performance fees already tracked)
-    $.accumulatedFees += exitCostAmount;
+    _addAccumulatedFees(exitCostAmount);
 
     IERC20(asset()).safeTransfer(receiver, assets);
 
@@ -967,7 +910,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   /// @inheritdoc ERC4626Upgradeable
   function maxDeposit(
     address receiver
-  ) public view virtual override(GenesisManagedVault, IERC4626) returns (uint256) {
+  ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
     if (paused() || isShutdown()) {
       return 0;
     }
@@ -991,7 +934,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
 
     // Calculate user's current assets (including pending deposits)
     uint256 userShares = balanceOf(receiver);
-    uint256 userCurrentAssets = _convertToAssets(userShares, Math.Rounding.Floor);
+    uint256 userCurrentAssets = convertToAssets(userShares);
 
     // Add any pending deposit assets for this user (across all unsettled epochs)
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
@@ -1026,7 +969,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   /// @inheritdoc ERC4626Upgradeable
   function maxMint(
     address receiver
-  ) public view virtual override(GenesisManagedVault, IERC4626) returns (uint256) {
+  ) public view virtual override(ERC4626Upgradeable, IERC4626) returns (uint256) {
     if (paused() || isShutdown()) {
       return 0;
     }
@@ -1236,10 +1179,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
                         PRIVATE FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-  /// @notice Calculate share price for a specific epoch based on vault performance
-  /// @param epoch The epoch to calculate share price for
+  /// @notice Calculate share price for a current epoch based on vault performance
   /// @return sharePrice The calculated share price (assets per share scaled by share decimals)
-  function _calculateRoundSharePrice(uint256 epoch) internal view returns (uint256) {
+  function _calculateCurrentSharePrice() internal view returns (uint256) {
     // If this is the first epoch or vault has no shares, use initial price
     if (totalSupply() == 0) {
       // Return 1 share worth 1 asset unit, scaled properly for decimals
@@ -1552,7 +1494,7 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     uint256 netAssets = grossAssets - exitCostAmount - performanceFeeAmount;
 
     // Track accumulated fees (exit cost only, performance fees already tracked)
-    $.accumulatedFees += exitCostAmount;
+    _addAccumulatedFees(exitCostAmount);
 
     // Update claimed amounts
     roundData.claimedRedeemShares += claimableShares;
@@ -1656,11 +1598,6 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     return GenesisVaultStorage.layout().epochRedeemUsers[epoch];
   }
 
-  /// @dev Calculates the cost part of an amount `assets` that already includes cost.
-  function _costOnTotal(uint256 assets, uint256 costRate) private pure returns (uint256) {
-    return assets.mulDiv(costRate, costRate + FLOAT_PRECISION, Math.Rounding.Ceil);
-  }
-
   /*//////////////////////////////////////////////////////////////
                             STORAGE VIEWERS
     //////////////////////////////////////////////////////////////*/
@@ -1670,28 +1607,9 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
     return GenesisVaultStorage.layout().strategy;
   }
 
-  /// @notice The entry cost percent that is charged when depositing.
-  ///
-  /// @dev Denominated in 18 decimals.
-  function entryCost() public view returns (uint256) {
-    return GenesisVaultStorage.layout().entryCost;
-  }
-
-  /// @notice The exit cost percent that is charged when withdrawing.
-  ///
-  /// @dev Denominated in 18 decimals.
-  function exitCost() public view returns (uint256) {
-    return GenesisVaultStorage.layout().exitCost;
-  }
-
   /// @notice When this vault is shutdown, only withdrawals are available. It can't be reverted.
   function isShutdown() public view returns (bool) {
     return GenesisVaultStorage.layout().shutdown;
-  }
-
-  /// @notice Get accumulated fees
-  function accumulatedFees() public view returns (uint256) {
-    return GenesisVaultStorage.layout().accumulatedFees;
   }
 
   /// @notice The address of baseVol contract.
@@ -1702,87 +1620,5 @@ contract GenesisVault is Initializable, GenesisManagedVault, IERC7540 {
   function roundData(uint256 epoch) public view returns (GenesisVaultStorage.RoundData memory) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
     return $.roundData[epoch];
-  }
-
-  /*//////////////////////////////////////////////////////////////
-                      USER-BASED PERFORMANCE FEE LOGIC
-  //////////////////////////////////////////////////////////////*/
-
-  /// @dev Updates user's WAEP on deposit
-  /// @param user The user address
-  /// @param newShares The amount of new shares being deposited
-  /// @param currentSharePrice The current share price (scaled by share decimals)
-  function _updateUserWAEP(address user, uint256 newShares, uint256 currentSharePrice) internal {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    GenesisVaultStorage.UserPerformanceData storage userData = $.userPerformanceData[user];
-
-    uint256 currentShares = balanceOf(user) - newShares; // Shares before this deposit
-
-    if (currentShares == 0) {
-      // First deposit: WAEP = current share price
-      userData.waep = currentSharePrice;
-    } else {
-      // Weighted average calculation
-      // WAEP_new = (WAEP_prev × shares_prev + sharePrice_current × shares_new) / (shares_prev + shares_new)
-      userData.waep =
-        (userData.waep * currentShares + currentSharePrice * newShares) /
-        (currentShares + newShares);
-    }
-
-    userData.totalShares = currentShares + newShares;
-    userData.lastUpdateEpoch = getCurrentEpoch();
-  }
-
-  /// @dev Calculates and charges performance fee on withdrawal
-  /// @param user The user address
-  /// @param withdrawShares The amount of shares being withdrawn
-  /// @param currentSharePrice The current share price (scaled by share decimals)
-  /// @return feeAmount The performance fee amount in assets
-  function _calculateAndChargePerformanceFee(
-    address user,
-    uint256 withdrawShares,
-    uint256 currentSharePrice
-  ) internal returns (uint256 feeAmount) {
-    GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
-    GenesisVaultStorage.UserPerformanceData storage userData = $.userPerformanceData[user];
-
-    // WAEP not set (migration case)
-    if (userData.waep == 0) {
-      userData.waep = currentSharePrice; // Initialize with current price
-      return 0; // No fee on first withdrawal after migration
-    }
-
-    // Calculate profit only if current price > WAEP
-    if (currentSharePrice > userData.waep) {
-      uint256 profitPerShare = currentSharePrice - userData.waep;
-      uint256 totalProfit = (profitPerShare * withdrawShares) / (10 ** decimals());
-
-      // Calculate performance fee (20%)
-      feeAmount = (totalProfit * performanceFee()) / FLOAT_PRECISION;
-
-      // Accumulate fees
-      $.accumulatedFees += feeAmount;
-
-      emit PerformanceFeeCharged(user, feeAmount, currentSharePrice, userData.waep);
-    }
-
-    // Update user data (WAEP remains unchanged for withdrawals)
-    userData.totalShares = balanceOf(user) - withdrawShares;
-
-    return feeAmount;
-  }
-
-  /// @notice Get user's WAEP data
-  /// @param user The user address
-  /// @return waep The user's weighted average entry price
-  /// @return totalShares The user's total shares tracked
-  /// @return lastUpdateEpoch The last epoch when data was updated
-  function getUserPerformanceData(
-    address user
-  ) external view returns (uint256 waep, uint256 totalShares, uint256 lastUpdateEpoch) {
-    GenesisVaultStorage.UserPerformanceData storage userData = GenesisVaultStorage
-      .layout()
-      .userPerformanceData[user];
-    return (userData.waep, userData.totalShares, userData.lastUpdateEpoch);
   }
 }

@@ -8,18 +8,6 @@ library GenesisVaultStorage {
   bytes32 internal constant SLOT =
     0x5ee42217d3eb996ad2b1dbf985c1bba88b7a17b6b441c8b6deb9a267d873da00;
 
-  // Note: Individual request structs removed since requestId = epoch
-  // All request data is now tracked in epoch-based mappings
-
-  struct UserPerformanceData {
-    /// @dev Weighted Average Entry Price (in share price units, scaled by share decimals precision)
-    uint256 waep;
-    /// @dev Total shares owned by the user
-    uint256 totalShares;
-    /// @dev Last epoch when this data was updated
-    uint256 lastUpdateEpoch;
-  }
-
   struct RoundData {
     // Request data
     /// @dev Total assets requested for deposit during this epoch
@@ -43,8 +31,6 @@ library GenesisVaultStorage {
     /// @dev BaseVol contract address for settlement callbacks
     address baseVolContract;
     address strategy;
-    uint256 entryCost;
-    uint256 exitCost;
     bool shutdown;
     // Note: nextRequestId, depositRequests, redeemRequests removed
     // ERC7540: requestId = epoch for fungibility and simplicity
@@ -70,17 +56,11 @@ library GenesisVaultStorage {
     mapping(address => mapping(uint256 => uint256)) userEpochClaimedRedeemShares;
     /// @dev List of epochs where user made redemptions
     mapping(address => uint256[]) userRedeemEpochs;
-    // Fee tracking
-    /// @dev Total accumulated fees (from deposits and withdrawals/redemptions)
-    uint256 accumulatedFees;
     // Auto-processing tracking
     /// @dev List of users who made deposit requests in each epoch (for auto-processing)
     mapping(uint256 => address[]) epochDepositUsers;
     /// @dev List of users who made redeem requests in each epoch (for auto-processing)
     mapping(uint256 => address[]) epochRedeemUsers;
-    // User-based performance fee tracking
-    /// @dev User performance data for WAEP-based performance fee calculation
-    mapping(address => UserPerformanceData) userPerformanceData;
   }
 
   function layout() internal pure returns (Layout storage $) {

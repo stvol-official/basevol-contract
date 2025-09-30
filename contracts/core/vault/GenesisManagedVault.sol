@@ -2,6 +2,7 @@
 pragma solidity ^0.8.4;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -28,6 +29,7 @@ abstract contract GenesisManagedVault is
   IGenesisVaultErrors
 {
   using Math for uint256;
+  using SafeERC20 for IERC20;
 
   uint256 internal constant FLOAT_PRECISION = 1e18;
 
@@ -35,15 +37,8 @@ abstract contract GenesisManagedVault is
   uint256 private constant MAX_MANAGEMENT_FEE = 5e16; // 5%
   /// @notice The maximum value of performance fee that can be configured.
   uint256 private constant MAX_PERFORMANCE_FEE = 5e17; // 50%
-
-  /// @dev Emitted when the management fee is collected to the fee recipient.
-  event ManagementFeeCollected(address indexed feeRecipient, uint256 indexed feeShares);
-
-  /// @dev Emitted when the performance fee is collected to the fee recipient.
-  event PerformanceFeeCollected(address indexed feeRecipient, uint256 indexed feeShares);
-
-  /// @dev Emitted when a new fee recipient is set.
-  event FeeRecipientChanged(address account, address newFeeRecipient);
+  /// @notice The maximum value of entry/exit cost that can be configured.
+  uint256 private constant MAX_COST = 0.10 ether; // 10%
 
   /// @dev Emitted when a new management fee configuration is set.
   event ManagementFeeChanged(address account, uint256 newManagementFee);
@@ -54,14 +49,38 @@ abstract contract GenesisManagedVault is
   /// @dev Emitted when a new hurdle rate configuration is set.
   event HurdleRateChanged(address account, uint256 newHurdleRate);
 
+  /// @dev Emitted when entry cost is updated
+  event EntryCostUpdated(address account, uint256 newEntryCost);
+
+  /// @dev Emitted when exit cost is updated
+  event ExitCostUpdated(address account, uint256 newExitCost);
+
+  /// @dev Emitted when fees are withdrawn
+  event FeesWithdrawn(address indexed to, uint256 amount);
+
+  /// @dev Emitted when performance fee is charged
+  event PerformanceFeeCharged(
+    address indexed user,
+    uint256 feeAmount,
+    uint256 currentSharePrice,
+    uint256 userWAEP
+  );
+
+  /// @dev Emitted when management fee is processed
+  event ManagementFeeProcessed(
+    uint256 indexed feeShares,
+    uint256 indexed totalSupply,
+    uint256 indexed timeElapsed
+  );
+
+  /// @dev Emitted when management fee recipient is updated
+  event ManagementFeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
+
   /// @dev Emitted when a new deposit limit of each user is set.
   event UserDepositLimitChanged(address account, uint256 newUserDepositLimit);
 
   /// @dev Emitted when a new deposit limit of a vault is set.
   event VaultDepositLimitChanged(address account, uint256 newVaultDepositLimit);
-
-  /// @dev Emitted when a new whitelist provider is set.
-  event WhitelistProviderChanged(address account, address newWhitelistProvider);
 
   /// @dev Emitted when a new admin is set.
   event AdminUpdated(address indexed account, address indexed newAdmin);
@@ -91,8 +110,12 @@ abstract contract GenesisManagedVault is
     __Pausable_init();
     __ERC20_init_unchained(name_, symbol_);
     __ERC4626_init_unchained(IERC20(asset_));
-    GenesisVaultManagedVaultStorage.layout().admin = admin_;
+    GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
+    $.admin = admin_;
     _setDepositLimits(type(uint256).max, type(uint256).max);
+
+    // Initialize management fee timestamp
+    $.managementFeeData.lastFeeTimestamp = block.timestamp;
   }
 
   /* internal functions */
@@ -116,25 +139,18 @@ abstract contract GenesisManagedVault is
 
   /// @dev Configures the fee information.
   ///
-  /// @param _feeRecipient The address of the fee recipient.
   /// @param _managementFee The management fee percent that is denominated in 18 decimals.
   /// @param _performanceFee The performance fee percent that is denominated in 18 decimals.
   /// @param _hurdleRate The hurdle rate percent that is denominated in 18 decimals.
   function setFeeInfos(
-    address _feeRecipient,
     uint256 _managementFee,
     uint256 _performanceFee,
     uint256 _hurdleRate
   ) external onlyAdmin {
-    require(_feeRecipient != address(0));
     require(_managementFee <= MAX_MANAGEMENT_FEE);
     require(_performanceFee <= MAX_PERFORMANCE_FEE);
 
     GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
-    if (feeRecipient() != _feeRecipient) {
-      $.feeRecipient = _feeRecipient;
-      emit FeeRecipientChanged(_msgSender(), _feeRecipient);
-    }
     if (managementFee() != _managementFee) {
       $.managementFee = _managementFee;
       emit ManagementFeeChanged(_msgSender(), _managementFee);
@@ -149,13 +165,28 @@ abstract contract GenesisManagedVault is
     }
   }
 
-  /// @dev Sets the address of the whitelist provider.
+  /// @dev Configures entry and exit costs.
   ///
-  /// @param provider Address of the whitelist provider, address(0) means not applying whitelist.
-  function setWhitelistProvider(address provider) external onlyOwner {
-    if (whitelistProvider() != provider) {
-      GenesisVaultManagedVaultStorage.layout().whitelistProvider = provider;
-      emit WhitelistProviderChanged(_msgSender(), provider);
+  /// @param _entryCost The entry cost percent that is denominated in 18 decimals.
+  /// @param _exitCost The exit cost percent that is denominated in 18 decimals.
+  function setEntryAndExitCost(uint256 _entryCost, uint256 _exitCost) external virtual onlyAdmin {
+    _setEntryCost(_entryCost);
+    _setExitCost(_exitCost);
+  }
+
+  function _setEntryCost(uint256 value) internal {
+    require(value <= MAX_COST, "Entry cost exceeds maximum");
+    if (entryCost() != value) {
+      GenesisVaultManagedVaultStorage.layout().entryCost = value;
+      emit EntryCostUpdated(_msgSender(), value);
+    }
+  }
+
+  function _setExitCost(uint256 value) internal {
+    require(value <= MAX_COST, "Exit cost exceeds maximum");
+    if (exitCost() != value) {
+      GenesisVaultManagedVaultStorage.layout().exitCost = value;
+      emit ExitCostUpdated(_msgSender(), value);
     }
   }
 
@@ -164,215 +195,124 @@ abstract contract GenesisManagedVault is
     _setDepositLimits(userLimit, vaultLimit);
   }
 
-  /*//////////////////////////////////////////////////////////////
-                        ERC4626 LOGIC FUNCTIONS
-    //////////////////////////////////////////////////////////////*/
+  /// @notice Withdraw accumulated fees (only admin)
+  /// @param to Address to receive the fees
+  /// @param amount Amount of fees to withdraw (0 = all)
+  function withdrawFees(address to, uint256 amount) external onlyAdmin {
+    GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
 
-  /// @inheritdoc ERC4626Upgradeable
-  function maxDeposit(address receiver) public view virtual override returns (uint256) {
-    uint256 _userDepositLimit = userDepositLimit();
-    uint256 _vaultDepositLimit = vaultDepositLimit();
+    uint256 availableFees = $.accumulatedFees;
+    require(availableFees > 0, "GenesisManagedVault: no fees available");
+    require(to != address(0), "GenesisManagedVault: invalid recipient");
 
-    if (_userDepositLimit == type(uint256).max && _vaultDepositLimit == type(uint256).max) {
-      return type(uint256).max;
-    } else {
-      uint256 userShares = balanceOf(receiver);
-      uint256 userAssets = convertToAssets(userShares);
-      (, uint256 availableDepositorLimit) = _userDepositLimit.trySub(userAssets);
-      (, uint256 availableVaultLimit) = _vaultDepositLimit.trySub(totalAssets());
-      uint256 allowed = availableDepositorLimit < availableVaultLimit
-        ? availableDepositorLimit
-        : availableVaultLimit;
-      return allowed;
-    }
-  }
+    uint256 withdrawAmount = amount == 0 ? availableFees : amount;
+    require(withdrawAmount <= availableFees, "GenesisManagedVault: insufficient fees");
 
-  /// @inheritdoc ERC4626Upgradeable
-  function maxMint(address receiver) public view virtual override returns (uint256) {
-    uint256 maxAssets = maxDeposit(receiver);
-    return maxAssets == type(uint256).max ? type(uint256).max : previewDeposit(maxAssets);
-  }
+    $.accumulatedFees -= withdrawAmount;
+    IERC20(asset()).safeTransfer(to, withdrawAmount);
 
-  /// @inheritdoc ERC4626Upgradeable
-  function _convertToShares(
-    uint256 assets,
-    Math.Rounding rounding
-  ) internal view override returns (uint256) {
-    return
-      assets.mulDiv(
-        _totalSupplyWithManagementFeeShares(feeRecipient()) + 10 ** _decimalsOffset(),
-        totalAssets() + 1,
-        rounding
-      );
-  }
-
-  /// @inheritdoc ERC4626Upgradeable
-  function _convertToAssets(
-    uint256 shares,
-    Math.Rounding rounding
-  ) internal view override returns (uint256) {
-    return
-      shares.mulDiv(
-        totalAssets() + 1,
-        _totalSupplyWithManagementFeeShares(feeRecipient()) + 10 ** _decimalsOffset(),
-        rounding
-      );
-  }
-
-  /// @dev Harvests the performance fee when it is available.
-  ///
-  /// @inheritdoc ERC4626Upgradeable
-  function _deposit(
-    address caller,
-    address receiver,
-    uint256 assets,
-    uint256 shares
-  ) internal virtual override {
-    super._deposit(caller, receiver, assets, shares);
-  }
-
-  /// @dev Harvests the performance fee when it is available.
-  ///
-  /// @inheritdoc ERC4626Upgradeable
-  function _withdraw(
-    address caller,
-    address receiver,
-    address owner,
-    uint256 assets,
-    uint256 shares
-  ) internal virtual override {
-    super._withdraw(caller, receiver, owner, assets, shares);
-  }
-
-  /// @dev Accrues the management fee when it is set.
-  ///
-  /// @inheritdoc ERC20Upgradeable
-  function _update(address from, address to, uint256 value) internal override(ERC20Upgradeable) {
-    address _feeRecipient = feeRecipient();
-    address _whitelistProvider = whitelistProvider();
-
-    if (to != address(0) && to != _feeRecipient && _whitelistProvider != address(0)) {
-      revert NotWhitelisted(to);
-    }
-
-    if (_feeRecipient != address(0)) {
-      if (
-        (from == _feeRecipient && to != address(0)) || (from != address(0) && to == _feeRecipient)
-      ) {
-        revert ManagementFeeTransfer(_feeRecipient);
-      }
-
-      if (from != address(0) || to != _feeRecipient) {
-        // called when minting to none of recipient
-        // to stop infinite loop
-        _accrueManagementFeeShares(_feeRecipient);
-      }
-    }
-
-    super._update(from, to, value);
-  }
-
-  /*//////////////////////////////////////////////////////////////
-                           FEE LOGIC FUNCTIONS
-    //////////////////////////////////////////////////////////////*/
-
-  /// @dev Should not be called when minting to fee recipient
-  function _accrueManagementFeeShares(address _feeRecipient) private {
-    uint256 _lastAccruedTimestamp = lastAccruedTimestamp();
-    if (_lastAccruedTimestamp == block.timestamp) {
-      // management fee must be 0, don't need to go through logic
-      return;
-    }
-    uint256 _managementFee = managementFee();
-    uint256 feeShares = _nextManagementFeeShares(
-      _feeRecipient,
-      _managementFee,
-      totalSupply(),
-      _lastAccruedTimestamp
-    );
-    if (_managementFee == 0 || _lastAccruedTimestamp == 0) {
-      // update lastAccruedTimestamp to accrue management fee only after fee is set
-      // when it is set, initialize it when lastAccruedTimestamp is 0
-      GenesisVaultManagedVaultStorage.layout().lastAccruedTimestamp = block.timestamp;
-    } else if (feeShares > 0) {
-      // only when feeShares is bigger than 0 when managementFee is set as none-zero,
-      // update lastAccruedTimestamp to mitigate DOS of management fee accruing
-      _mint(_feeRecipient, feeShares);
-      GenesisVaultManagedVaultStorage.layout().lastAccruedTimestamp = block.timestamp;
-      emit ManagementFeeCollected(_feeRecipient, feeShares);
-    }
-  }
-
-  /// @dev Calculates the claimable shares for the management fee
-  function _nextManagementFeeShares(
-    address _feeRecipient,
-    uint256 _managementFee,
-    uint256 _totalSupply,
-    uint256 _lastAccruedTimestamp
-  ) private view returns (uint256) {
-    if (_managementFee == 0 || _lastAccruedTimestamp == 0) return 0;
-    uint256 duration = block.timestamp - _lastAccruedTimestamp;
-    if (duration == 0) return 0;
-    uint256 accruedFee = _calcFeeFraction(_managementFee, duration);
-    // should accrue fees regarding to other's shares except for feeRecipient
-    uint256 shares = _totalSupply - balanceOf(_feeRecipient);
-    // should be rounded to bottom to stop generating 1 shares by calling accrueManagementFeeShares function
-    uint256 managementFeeShares = shares.mulDiv(accruedFee, FLOAT_PRECISION);
-    return managementFeeShares;
-  }
-
-  /// @dev The total supply of shares including the next management fee shares.
-  function _totalSupplyWithManagementFeeShares(
-    address _feeRecipient
-  ) private view returns (uint256) {
-    uint256 _totalSupply = totalSupply();
-    return
-      _totalSupply +
-      _nextManagementFeeShares(
-        _feeRecipient,
-        managementFee(),
-        _totalSupply,
-        lastAccruedTimestamp()
-      );
+    emit FeesWithdrawn(to, withdrawAmount);
   }
 
   function _calcFeeFraction(uint256 annualFee, uint256 duration) private pure returns (uint256) {
     return annualFee.mulDiv(duration, 365 days);
   }
 
-  /*//////////////////////////////////////////////////////////////
-                            PUBLIC FUNCTIONS
-    //////////////////////////////////////////////////////////////*/
-
-  /// @notice Mints the next accrued management fee shares.
-  /// This function can be called by anyone.
-  function accrueManagementFeeShares() public {
-    _accrueManagementFeeShares(feeRecipient());
+  /// @dev Calculates the cost part of an amount `assets` that already includes cost.
+  function _costOnTotal(uint256 assets, uint256 costRate) internal pure returns (uint256) {
+    return assets.mulDiv(costRate, costRate + FLOAT_PRECISION, Math.Rounding.Ceil);
   }
 
-  /*//////////////////////////////////////////////////////////////
-                         PUBLIC VIEW FUNCTIONS
-    //////////////////////////////////////////////////////////////*/
+  /// @dev Updates user's WAEP on deposit
+  /// @param user The user address
+  /// @param newShares The amount of new shares being deposited
+  /// @param currentSharePrice The current share price (scaled by share decimals)
+  function _updateUserWAEP(address user, uint256 newShares, uint256 currentSharePrice) internal {
+    GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
+    GenesisVaultManagedVaultStorage.UserPerformanceData storage userData = $.userPerformanceData[
+      user
+    ];
 
-  /// @notice Returns the accrued shares of the management fee recipient
-  function nextManagementFeeShares() public view returns (uint256) {
-    return
-      _nextManagementFeeShares(
-        feeRecipient(),
-        managementFee(),
-        totalSupply(),
-        lastAccruedTimestamp()
-      );
+    uint256 currentShares = balanceOf(user) - newShares; // Shares before this deposit
+
+    if (currentShares == 0) {
+      // First deposit: WAEP = current share price
+      userData.waep = currentSharePrice;
+    } else {
+      // Weighted average calculation
+      // WAEP_new = (WAEP_prev × shares_prev + sharePrice_current × shares_new) / (shares_prev + shares_new)
+      userData.waep =
+        (userData.waep * currentShares + currentSharePrice * newShares) /
+        (currentShares + newShares);
+    }
+
+    userData.totalShares = currentShares + newShares;
+    userData.lastUpdateEpoch = block.timestamp; // Use block.timestamp as fallback
+  }
+
+  /// @dev Calculates and charges performance fee on withdrawal
+  /// @param user The user address
+  /// @param withdrawShares The amount of shares being withdrawn
+  /// @param currentSharePrice The current share price (scaled by share decimals)
+  /// @return feeAmount The performance fee amount in assets
+  function _calculateAndChargePerformanceFee(
+    address user,
+    uint256 withdrawShares,
+    uint256 currentSharePrice
+  ) internal returns (uint256 feeAmount) {
+    GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
+    GenesisVaultManagedVaultStorage.UserPerformanceData storage userData = $.userPerformanceData[
+      user
+    ];
+
+    // WAEP not set (migration case)
+    if (userData.waep == 0) {
+      userData.waep = currentSharePrice; // Initialize with current price
+      return 0; // No fee on first withdrawal after migration
+    }
+
+    // Calculate profit only if current price > WAEP
+    if (currentSharePrice > userData.waep) {
+      uint256 profitPerShare = currentSharePrice - userData.waep;
+      uint256 totalProfit = (profitPerShare * withdrawShares) / (10 ** decimals());
+
+      // Apply hurdle rate: only charge performance fee on profit above hurdle rate
+      uint256 hurdleRateValue = hurdleRate();
+      if (hurdleRateValue > 0) {
+        // Calculate the hurdle rate threshold in terms of profit per share
+        // hurdleRate is in 18 decimals, so we need to scale it properly
+        uint256 hurdleThresholdPerShare = (userData.waep * hurdleRateValue) / FLOAT_PRECISION;
+
+        // Only charge fee on profit above the hurdle threshold
+        if (profitPerShare > hurdleThresholdPerShare) {
+          uint256 excessProfitPerShare = profitPerShare - hurdleThresholdPerShare;
+          uint256 excessProfit = (excessProfitPerShare * withdrawShares) / (10 ** decimals());
+
+          // Calculate performance fee on excess profit only
+          feeAmount = (excessProfit * performanceFee()) / FLOAT_PRECISION;
+        }
+        // If profit doesn't exceed hurdle rate, no performance fee
+      } else {
+        // No hurdle rate set, charge fee on all profit
+        feeAmount = (totalProfit * performanceFee()) / FLOAT_PRECISION;
+      }
+
+      // Accumulate fees if any
+      if (feeAmount > 0) {
+        $.accumulatedFees += feeAmount;
+        emit PerformanceFeeCharged(user, feeAmount, currentSharePrice, userData.waep);
+      }
+    }
+
+    // Update user data (WAEP remains unchanged for withdrawals)
+    userData.totalShares = balanceOf(user) - withdrawShares;
+
+    return feeAmount;
   }
 
   /*//////////////////////////////////////////////////////////////
                             STORAGE GETTERS
     //////////////////////////////////////////////////////////////*/
-
-  /// @notice The address of a fee recipient who receives the management and performance fees.
-  function feeRecipient() public view returns (address) {
-    return GenesisVaultManagedVaultStorage.layout().feeRecipient;
-  }
 
   /// @notice The management fee percent configuration denominated in 18 decimals.
   function managementFee() public view returns (uint256) {
@@ -387,17 +327,6 @@ abstract contract GenesisManagedVault is
   /// @notice The hurdle rate configuration denominated in 18 decimals.
   function hurdleRate() public view returns (uint256) {
     return GenesisVaultManagedVaultStorage.layout().hurdleRate;
-  }
-
-  /// @notice The last accrued block.timestamp when the management was accrued.
-  function lastAccruedTimestamp() public view returns (uint256) {
-    return GenesisVaultManagedVaultStorage.layout().lastAccruedTimestamp;
-  }
-
-  /// @notice The address of a white list provider who provides users allowed to use the vault.
-  /// Supposed to be used in private mode, and will be disabled in public mode by setting to zero address.
-  function whitelistProvider() public view returns (address) {
-    return GenesisVaultManagedVaultStorage.layout().whitelistProvider;
   }
 
   /// @notice The allowed deposit limit of each user.
@@ -423,5 +352,114 @@ abstract contract GenesisManagedVault is
     GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
     $.admin = account;
     emit AdminUpdated(_msgSender(), account);
+  }
+
+  /// @notice The entry cost percent that is charged when depositing.
+  ///
+  /// @dev Denominated in 18 decimals.
+  function entryCost() public view returns (uint256) {
+    return GenesisVaultManagedVaultStorage.layout().entryCost;
+  }
+
+  /// @notice The exit cost percent that is charged when withdrawing.
+  ///
+  /// @dev Denominated in 18 decimals.
+  function exitCost() public view returns (uint256) {
+    return GenesisVaultManagedVaultStorage.layout().exitCost;
+  }
+
+  /// @notice Get accumulated fees
+  function accumulatedFees() public view returns (uint256) {
+    return GenesisVaultManagedVaultStorage.layout().accumulatedFees;
+  }
+
+  /// @notice Get user's WAEP data
+  /// @param user The user address
+  /// @return waep The user's weighted average entry price
+  /// @return totalShares The user's total shares tracked
+  /// @return lastUpdateEpoch The last epoch when data was updated
+  function getUserPerformanceData(
+    address user
+  ) external view returns (uint256 waep, uint256 totalShares, uint256 lastUpdateEpoch) {
+    GenesisVaultManagedVaultStorage.UserPerformanceData
+      storage userData = GenesisVaultManagedVaultStorage.layout().userPerformanceData[user];
+    return (userData.waep, userData.totalShares, userData.lastUpdateEpoch);
+  }
+
+  /// @notice Add fees to accumulated fees (internal function for GenesisVault)
+  /// @param amount The amount of fees to add
+  function _addAccumulatedFees(uint256 amount) internal {
+    GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
+    $.accumulatedFees += amount;
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                        MANAGEMENT FEE FUNCTIONS
+  //////////////////////////////////////////////////////////////*/
+
+  /// @notice Set management fee recipient
+  /// @param recipient Address to receive management fees (address(0) means vault itself)
+  function setManagementFeeRecipient(address recipient) external onlyAdmin {
+    GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
+    address oldRecipient = $.managementFeeData.feeRecipient;
+    $.managementFeeData.feeRecipient = recipient;
+    emit ManagementFeeRecipientUpdated(oldRecipient, recipient);
+  }
+
+  /// @notice Get management fee recipient
+  /// @return Address that receives management fees
+  function getManagementFeeRecipient() external view returns (address) {
+    return GenesisVaultManagedVaultStorage.layout().managementFeeData.feeRecipient;
+  }
+
+  /// @notice Get management fee data
+  /// @return lastFeeTimestamp Last timestamp when fee was charged
+  /// @return totalFeesCollected Total fees collected in shares
+  /// @return feeRecipient Address that receives fees
+  function getManagementFeeData()
+    external
+    view
+    returns (uint256 lastFeeTimestamp, uint256 totalFeesCollected, address feeRecipient)
+  {
+    GenesisVaultManagedVaultStorage.ManagementFeeData
+      storage feeData = GenesisVaultManagedVaultStorage.layout().managementFeeData;
+    return (feeData.lastFeeTimestamp, feeData.totalFeesCollected, feeData.feeRecipient);
+  }
+
+  /// @notice Internal function to mint management fee shares
+  function _mintManagementFeeShares() internal {
+    GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
+    GenesisVaultManagedVaultStorage.ManagementFeeData storage feeData = $.managementFeeData;
+
+    uint256 currentTotalSupply = totalSupply();
+    if (currentTotalSupply == 0) return;
+
+    uint256 timeElapsed = block.timestamp - feeData.lastFeeTimestamp;
+    if (timeElapsed == 0) return; // Same block, skip
+
+    // Calculate fee rate based on elapsed time
+    uint256 feeRate = _calcFeeFraction(managementFee(), timeElapsed);
+    uint256 feeShares = (currentTotalSupply * feeRate) / FLOAT_PRECISION;
+
+    if (feeShares == 0) {
+      // Update timestamp even if no fee to prevent accumulation
+      feeData.lastFeeTimestamp = block.timestamp;
+      return;
+    }
+
+    // Determine recipient: if not set, mint to vault itself
+    address recipient = feeData.feeRecipient;
+    if (recipient == address(0)) {
+      recipient = address(this);
+    }
+
+    // Mint shares to recipient
+    _mint(recipient, feeShares);
+
+    // Update state
+    feeData.lastFeeTimestamp = block.timestamp;
+    feeData.totalFeesCollected += feeShares;
+
+    emit ManagementFeeProcessed(feeShares, currentTotalSupply, timeElapsed);
   }
 }

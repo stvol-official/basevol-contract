@@ -8,11 +8,27 @@ library GenesisVaultManagedVaultStorage {
   bytes32 internal constant SLOT =
     0xcafa32707f311a92186c31e9dd38c386738c8cc0fbd78d451ab0dd57c3df5c00;
 
+  struct UserPerformanceData {
+    /// @dev Weighted Average Entry Price (in share price units, scaled by share decimals precision)
+    uint256 waep;
+    /// @dev Total shares owned by the user
+    uint256 totalShares;
+    /// @dev Last epoch when this data was updated
+    uint256 lastUpdateEpoch;
+  }
+
+  struct ManagementFeeData {
+    /// @dev Last timestamp when management fee was charged
+    uint256 lastFeeTimestamp;
+    /// @dev Total management fees collected (in shares)
+    uint256 totalFeesCollected;
+    /// @dev Address to receive management fees (address(0) means vault itself)
+    address feeRecipient;
+  }
+
   struct Layout {
     // admin
     address admin;
-    // fee recipient
-    address feeRecipient;
     // management fee
     uint256 managementFee;
     // performance fee
@@ -20,13 +36,18 @@ library GenesisVaultManagedVaultStorage {
     /// hurdle rate
     uint256 hurdleRate;
     // last timestamp for management fee
-    uint256 lastAccruedTimestamp;
-    // address of the whitelist provider
-    address whitelistProvider;
-    // deposit limit in assets for each user
     uint256 userDepositLimit;
     // deposit limit in assets for this vault
     uint256 vaultDepositLimit;
+    // Entry and exit costs
+    uint256 entryCost;
+    uint256 exitCost;
+    // Accumulated fees
+    uint256 accumulatedFees;
+    // User-based performance fee tracking
+    mapping(address => UserPerformanceData) userPerformanceData;
+    // Management fee data
+    ManagementFeeData managementFeeData;
     /* IMPROTANT: you can add new variables here */
   }
 
