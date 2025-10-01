@@ -73,20 +73,29 @@ abstract contract GenesisManagedVault is
     uint256 indexed timeElapsed
   );
 
-  /// @dev Emitted when management fee recipient is updated
-  event ManagementFeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
-
   /// @dev Emitted when a new deposit limit of each user is set.
-  event UserDepositLimitChanged(address account, uint256 newUserDepositLimit);
+  event UserDepositLimitChanged(
+    address account,
+    uint256 oldUserDepositLimit,
+    uint256 newUserDepositLimit
+  );
 
   /// @dev Emitted when a new deposit limit of a vault is set.
-  event VaultDepositLimitChanged(address account, uint256 newVaultDepositLimit);
+  event VaultDepositLimitChanged(
+    address account,
+    uint256 oldVaultDepositLimit,
+    uint256 newVaultDepositLimit
+  );
 
   /// @dev Emitted when a new admin is set.
-  event AdminUpdated(address indexed account, address indexed newAdmin);
+  event AdminUpdated(address indexed account, address indexed oldAdmin, address indexed newAdmin);
 
   /// @dev Emitted when fee recipient is updated
-  event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
+  event FeeRecipientUpdated(
+    address indexed account,
+    address indexed oldRecipient,
+    address indexed newRecipient
+  );
 
   /// @dev Emitted when fees are transferred to recipient
   event FeesTransferred(address indexed recipient, uint256 amount, string feeType);
@@ -130,12 +139,14 @@ abstract contract GenesisManagedVault is
   function _setDepositLimits(uint256 userLimit, uint256 vaultLimit) internal {
     GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
     if (userDepositLimit() != userLimit) {
+      uint256 oldUserDepositLimit = $.userDepositLimit;
       $.userDepositLimit = userLimit;
-      emit UserDepositLimitChanged(_msgSender(), userLimit);
+      emit UserDepositLimitChanged(_msgSender(), oldUserDepositLimit, userLimit);
     }
     if (vaultDepositLimit() != vaultLimit) {
+      uint256 oldVaultDepositLimit = $.vaultDepositLimit;
       $.vaultDepositLimit = vaultLimit;
-      emit VaultDepositLimitChanged(_msgSender(), vaultLimit);
+      emit VaultDepositLimitChanged(_msgSender(), oldVaultDepositLimit, vaultLimit);
     }
   }
 
@@ -149,6 +160,7 @@ abstract contract GenesisManagedVault is
   /// @param _performanceFee The performance fee percent that is denominated in 18 decimals.
   /// @param _hurdleRate The hurdle rate percent that is denominated in 18 decimals.
   function setFeeInfos(
+    address _feeRecipient,
     uint256 _managementFee,
     uint256 _performanceFee,
     uint256 _hurdleRate
@@ -157,15 +169,20 @@ abstract contract GenesisManagedVault is
     require(_performanceFee <= MAX_PERFORMANCE_FEE);
 
     GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
-    if (managementFee() != _managementFee) {
+    if ($.feeRecipient != _feeRecipient) {
+      address oldFeeRecipient = $.feeRecipient;
+      $.feeRecipient = _feeRecipient;
+      emit FeeRecipientUpdated(_msgSender(), oldFeeRecipient, _feeRecipient);
+    }
+    if ($.managementFee != _managementFee) {
       $.managementFee = _managementFee;
       emit ManagementFeeChanged(_msgSender(), _managementFee);
     }
-    if (performanceFee() != _performanceFee) {
+    if ($.performanceFee != _performanceFee) {
       $.performanceFee = _performanceFee;
       emit PerformanceFeeChanged(_msgSender(), _performanceFee);
     }
-    if (hurdleRate() != _hurdleRate) {
+    if ($.hurdleRate != _hurdleRate) {
       $.hurdleRate = _hurdleRate;
       emit HurdleRateChanged(_msgSender(), _hurdleRate);
     }
@@ -306,6 +323,11 @@ abstract contract GenesisManagedVault is
                             STORAGE GETTERS
     //////////////////////////////////////////////////////////////*/
 
+  /// @notice Get fee recipient for all fees
+  /// @return Address that receives all fees
+  function feeRecipient() external view returns (address) {
+    return GenesisVaultManagedVaultStorage.layout().feeRecipient;
+  }
   /// @notice The management fee percent configuration denominated in 18 decimals.
   function managementFee() public view returns (uint256) {
     return GenesisVaultManagedVaultStorage.layout().managementFee;
@@ -342,8 +364,9 @@ abstract contract GenesisManagedVault is
   /// A zero address means disabling admin functions.
   function setAdmin(address account) external onlyOwner {
     GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
+    address oldAdmin = $.admin;
     $.admin = account;
-    emit AdminUpdated(_msgSender(), account);
+    emit AdminUpdated(_msgSender(), oldAdmin, account);
   }
 
   /// @notice The entry cost percent that is charged when depositing.
@@ -395,21 +418,6 @@ abstract contract GenesisManagedVault is
   /*//////////////////////////////////////////////////////////////
                         MANAGEMENT FEE FUNCTIONS
   //////////////////////////////////////////////////////////////*/
-
-  /// @notice Set fee recipient for all fees (entry, exit, performance)
-  /// @param recipient Address to receive all fees (address(0) means vault itself)
-  function setFeeRecipient(address recipient) external onlyAdmin {
-    GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
-    address oldRecipient = $.feeRecipient;
-    $.feeRecipient = recipient;
-    emit FeeRecipientUpdated(oldRecipient, recipient);
-  }
-
-  /// @notice Get fee recipient for all fees
-  /// @return Address that receives all fees
-  function getFeeRecipient() external view returns (address) {
-    return GenesisVaultManagedVaultStorage.layout().feeRecipient;
-  }
 
   /// @notice Get management fee data
   /// @return lastFeeTimestamp Last timestamp when fee was charged

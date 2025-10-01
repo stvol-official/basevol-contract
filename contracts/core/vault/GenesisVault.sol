@@ -134,6 +134,10 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
 
     GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
+    if (roundData.isSettled) {
+      revert RoundAlreadySettled(epoch);
+    }
+
     // Calculate share price based on vault's current state
     uint256 sharePrice = _calculateCurrentSharePrice();
 
@@ -327,7 +331,7 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     );
 
     // Essential: Validate against deposit limits
-    uint256 maxDepositAmount = maxDeposit(owner);
+    uint256 maxDepositAmount = maxRequestDeposit(owner);
     require(assets <= maxDepositAmount, "GenesisVault: deposit exceeds limit");
 
     // Transfer assets to vault
@@ -571,7 +575,7 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
   ) external onlyControllerOrOperator(controller) returns (uint256 shares) {
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
 
-    // Epoch-based: Calculate total claimable across all epochs
+    // Epoch-based: Calculate total claimable across last 50 user epochs
     uint256 totalClaimable = _calculateClaimableDepositAssetsAcrossEpochs(controller);
     require(totalClaimable >= assets, "GenesisVault: insufficient claimable assets");
 
@@ -580,8 +584,9 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 totalShares = 0;
 
     uint256[] memory userEpochs = $.userDepositEpochs[controller];
-    for (uint256 i = 0; i < userEpochs.length && remainingAssets > 0; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    for (uint256 i = 0; i < epochsToCheck && remainingAssets > 0; i++) {
+      uint256 epoch = userEpochs[userEpochs.length - epochsToCheck + i];
       GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -633,8 +638,9 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 totalAssetsUsed = 0;
 
     uint256[] memory userEpochs = $.userDepositEpochs[controller];
-    for (uint256 i = 0; i < userEpochs.length && remainingShares > 0; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    for (uint256 i = 0; i < epochsToCheck && remainingShares > 0; i++) {
+      uint256 epoch = userEpochs[userEpochs.length - epochsToCheck + i];
       GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -704,8 +710,9 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 totalPerformanceFees = 0;
 
     uint256[] memory userEpochs = $.userRedeemEpochs[controller];
-    for (uint256 i = 0; i < userEpochs.length && remainingGrossAssets > 0; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    for (uint256 i = 0; i < epochsToCheck && remainingGrossAssets > 0; i++) {
+      uint256 epoch = userEpochs[userEpochs.length - epochsToCheck + i];
       GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -780,8 +787,9 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 totalPerformanceFees = 0;
 
     uint256[] memory userEpochs = $.userRedeemEpochs[controller];
-    for (uint256 i = 0; i < userEpochs.length && remainingShares > 0; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    for (uint256 i = 0; i < epochsToCheck && remainingShares > 0; i++) {
+      uint256 epoch = userEpochs[userEpochs.length - epochsToCheck + i];
       GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -926,13 +934,14 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 userShares = balanceOf(receiver);
     uint256 userCurrentAssets = convertToAssets(userShares);
 
-    // Add any pending deposit assets for this user (across all unsettled epochs)
+    // Add any pending deposit assets for this user (across last 50 user epochs)
     GenesisVaultStorage.Layout storage $ = GenesisVaultStorage.layout();
     uint256 userPendingAssets = 0;
     uint256[] memory userEpochs = $.userDepositEpochs[receiver];
 
-    for (uint256 i = 0; i < userEpochs.length; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    for (uint256 i = 0; i < epochsToCheck; i++) {
+      uint256 epoch = userEpochs[userEpochs.length - 1 - i];
       if (!$.roundData[epoch].isSettled) {
         userPendingAssets += $.userEpochDepositAssets[receiver][epoch];
       }
@@ -1093,7 +1102,7 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     }
   }
 
-  /// @notice Calculate claimable deposit assets across all settled epochs
+  /// @notice Calculate claimable deposit assets across last 50 user epochs
   function _calculateClaimableDepositAssetsAcrossEpochs(
     address controller
   ) internal view returns (uint256) {
@@ -1101,8 +1110,9 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 totalClaimable = 0;
     uint256[] memory userEpochs = $.userDepositEpochs[controller];
 
-    for (uint256 i = 0; i < userEpochs.length; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    for (uint256 i = 0; i < epochsToCheck; i++) {
+      uint256 epoch = userEpochs[userEpochs.length - 1 - i];
       GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
       if (roundData.isSettled) {
@@ -1112,7 +1122,7 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     return totalClaimable;
   }
 
-  /// @notice Calculate claimable redeem shares across all settled epochs
+  /// @notice Calculate claimable redeem shares across last 50 user epochs
   function _calculateClaimableRedeemSharesAcrossEpochs(
     address controller
   ) internal view returns (uint256) {
@@ -1120,8 +1130,9 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 totalClaimable = 0;
     uint256[] memory userEpochs = $.userRedeemEpochs[controller];
 
-    for (uint256 i = 0; i < userEpochs.length; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    for (uint256 i = 0; i < epochsToCheck; i++) {
+      uint256 epoch = userEpochs[userEpochs.length - 1 - i];
       GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
       if (roundData.isSettled) {
@@ -1144,8 +1155,9 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 remainingAssets = claimableAssets;
 
     uint256[] memory userEpochs = $.userDepositEpochs[controller];
-    for (uint256 i = 0; i < userEpochs.length && remainingAssets > 0; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    for (uint256 i = 0; i < epochsToCheck && remainingAssets > 0; i++) {
+      uint256 epoch = userEpochs[userEpochs.length - epochsToCheck + i];
       GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -1231,8 +1243,8 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 totalPending = 0;
     uint256 currentEpoch = getCurrentEpoch();
 
-    // Check recent epochs (last 10) for pending deposits
-    for (uint256 i = 0; i < 10 && currentEpoch >= i; i++) {
+    // Check recent epochs (last 50) for pending deposits
+    for (uint256 i = 0; i < 50 && currentEpoch >= i; i++) {
       uint256 epoch = currentEpoch - i;
       GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
@@ -1251,8 +1263,8 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 totalPending = 0;
     uint256 currentEpoch = getCurrentEpoch();
 
-    // Check recent epochs (last 10) for pending redeems
-    for (uint256 i = 0; i < 10 && currentEpoch >= i; i++) {
+    // Check recent epochs (last 50) for pending redeems
+    for (uint256 i = 0; i < 50 && currentEpoch >= i; i++) {
       uint256 epoch = currentEpoch - i;
       GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
@@ -1264,7 +1276,7 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     return totalPending;
   }
 
-  /// @notice Calculate claimable redeem assets across all settled epochs (for legacy functions)
+  /// @notice Calculate claimable redeem assets across last 50 user epochs (for legacy functions)
   function _calculateClaimableRedeemAssetsAcrossEpochs(
     address controller
   ) internal view returns (uint256) {
@@ -1272,8 +1284,9 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     uint256 totalClaimable = 0;
     uint256[] memory userEpochs = $.userRedeemEpochs[controller];
 
-    for (uint256 i = 0; i < userEpochs.length; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    for (uint256 i = 0; i < epochsToCheck; i++) {
+      uint256 epoch = userEpochs[userEpochs.length - epochsToCheck + i];
       GenesisVaultStorage.RoundData storage roundData = $.roundData[epoch];
 
       if (roundData.isSettled) {

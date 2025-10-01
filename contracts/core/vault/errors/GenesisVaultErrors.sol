@@ -42,4 +42,7 @@ interface IGenesisVaultErrors {
 
   /// @notice BaseVol contract not set
   error BaseVolContractNotSet();
+
+  /// @notice Round already settled
+  error RoundAlreadySettled(uint256 epoch);
 }
