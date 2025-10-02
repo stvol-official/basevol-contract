@@ -21,12 +21,14 @@ const NETWORK_CONFIG = {
     blockExplorer: "https://sepolia.basescan.org",
     etherscanApiUrl: "https://api-sepolia.basescan.org/api",
     rpcUrl: "https://sepolia.base.org",
+    pythLazerLibAddress: "0x850ec04577295dd7e0a75228dfea3bb29328922e", // testnet
   },
   base: {
     chainId: 8453,
     blockExplorer: "https://basescan.org",
     etherscanApiUrl: "https://api.basescan.org/api",
     rpcUrl: "https://mainnet.base.org",
+    pythLazerLibAddress: "0x3A832CE3A1CEef0A065afD12a29526BE718f8B41", // https://basescan.org/address/0xF72a66D1e650dd25864710716afE794707D654F1#code -> Settings
   },
 };
 
@@ -89,10 +91,24 @@ function sleep(ms: number) {
 async function analyzeFacet(
   facetInfo: { name: string; path: string },
   diamondAddress: string,
+  pythLazerLibAddress?: string,
 ): Promise<FacetAnalysis> {
   console.log(`🔍 Analyzing ${facetInfo.name}...`);
 
-  const FacetFactory = await ethers.getContractFactory(facetInfo.name);
+  // Check if this facet needs PythLazerLib
+  const needsPythLazerLib = facetInfo.name === "RoundManagementFacet";
+
+  let FacetFactory;
+  if (needsPythLazerLib && pythLazerLibAddress) {
+    FacetFactory = await ethers.getContractFactory(facetInfo.name, {
+      libraries: {
+        PythLazerLib: pythLazerLibAddress,
+      },
+    });
+  } else {
+    FacetFactory = await ethers.getContractFactory(facetInfo.name);
+  }
+
   const newFacet = await FacetFactory.deploy();
   await newFacet.waitForDeployment();
   const newFacetAddress = await newFacet.getAddress();
@@ -262,6 +278,17 @@ const main = async () => {
   const [deployer] = await ethers.getSigners();
   console.log("Deployer:", deployer.address);
 
+  // Use existing PythLazerLib if needed
+  let pythLazerLibAddress: string | undefined;
+  const needsPythLazerLib = selectedFacets.some(
+    (facet: any) => facet.name === "RoundManagementFacet",
+  );
+
+  if (needsPythLazerLib) {
+    pythLazerLibAddress = NETWORK_CONFIG[networkName].pythLazerLibAddress;
+    console.log(`📡 Using existing PythLazerLib at: ${pythLazerLibAddress}\n`);
+  }
+
   console.log(`\n🔍 Analyzing ${selectedFacets.length} facet(s) for changes...\n`);
 
   const facetAnalyses: FacetAnalysis[] = [];
@@ -272,7 +299,7 @@ const main = async () => {
     console.log(`[${i + 1}/${selectedFacets.length}] Analyzing ${facet.name}...`);
 
     try {
-      const analysis = await analyzeFacet(facet, DIAMOND_ADDRESS);
+      const analysis = await analyzeFacet(facet, DIAMOND_ADDRESS, pythLazerLibAddress);
       facetAnalyses.push(analysis);
       totalCuts.push(...analysis.cuts);
 
@@ -358,13 +385,16 @@ const main = async () => {
     ]);
 
     console.log("📱 Safe 사용법 (Raw 트랜잭션 방법):");
-    console.log("1. https://safe.base.org/ 또는 https://safe.optimism.io/ 접속");
+    console.log("1. https://app.safe.global/ 또는 https://safe.optimism.io/ 접속");
     console.log("2. 'New transaction' 클릭");
-    console.log("3. 'Send tokens' 선택");
+    console.log("3. 'Transaction Builder' 선택");
+    console.log("4. 'Custom data toggle");
     console.log("4. 다음 정보를 입력:");
+    console.log("   Enter Address:", DIAMOND_ADDRESS);
+    console.log("   ABI:");
     console.log("   To:", DIAMOND_ADDRESS);
-    console.log("   Value: 0");
-    console.log("   Data:", data);
+    console.log("   ETH Value: 0");
+    console.log("   Data(Hex encoded):", data);
     console.log("5. 트랜잭션 생성 후 멀티시그 서명");
     console.log("6. 실행");
 
