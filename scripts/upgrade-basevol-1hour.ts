@@ -2,8 +2,20 @@ import { ethers, network, run, upgrades } from "hardhat";
 import input from "@inquirer/input";
 
 /*
- npx hardhat run --network base_sepolia scripts/upgrade-basevol-1hour.ts
- npx hardhat run --network base scripts/upgrade-basevol-1hour.ts
+ ⚠️  LEGACY SCRIPT - FOR BACKUP PURPOSES ONLY ⚠️
+ 
+ This script upgrades BaseVolOneHour using the OLD UUPS proxy pattern.
+ The project has been migrated to Diamond Pattern.
+ 
+ For NEW upgrades, use:
+   npx hardhat run --network base_sepolia scripts/basevol/upgrade-basevol-facet.ts
+   npx hardhat run --network base scripts/basevol/upgrade-basevol-facet.ts
+ 
+ Only use this script if you specifically need to upgrade a legacy UUPS proxy.
+ 
+ Original commands (LEGACY):
+   npx hardhat run --network base_sepolia scripts/upgrade-basevol-1hour.ts
+   npx hardhat run --network base scripts/upgrade-basevol-1hour.ts
 */
 
 const NETWORK = ["base_sepolia", "base"];
@@ -15,6 +27,30 @@ function sleep(ms: number) {
 }
 
 const upgrade = async () => {
+  // Show legacy warning at the start
+  console.log("\n" + "=".repeat(80));
+  console.log("⚠️  LEGACY UPGRADE SCRIPT WARNING ⚠️");
+  console.log("=".repeat(80));
+  console.log("This script upgrades BaseVolOneHour using the LEGACY UUPS proxy pattern.");
+  console.log("");
+  console.log("The project has migrated to Diamond Pattern.");
+  console.log("For NEW upgrades, please use:");
+  console.log("  npx hardhat run --network <network> scripts/basevol/upgrade-basevol-facet.ts");
+  console.log("=".repeat(80) + "\n");
+
+  const shouldContinue = await input({
+    message: "Are you sure you want to upgrade using the LEGACY UUPS pattern? (yes/no)",
+    default: "no",
+    validate: (val) => {
+      return ["yes", "no", "y", "n"].includes(val.toLowerCase()) || "Please enter yes or no";
+    },
+  });
+
+  if (!["yes", "y"].includes(shouldContinue.toLowerCase())) {
+    console.log("❌ Upgrade cancelled by user");
+    console.log("💡 Please use: scripts/basevol/upgrade-basevol-facet.ts");
+    process.exit(0);
+  }
   // Get network data from Hardhat config (see hardhat.config.ts).
   const networkName = network.name;
   const contractName = "BaseVolOneHour";

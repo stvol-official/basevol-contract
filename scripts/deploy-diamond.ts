@@ -1,8 +1,21 @@
 import { ethers } from "hardhat";
+import input from "@inquirer/input";
 
 /*
- npx hardhat run --network base_sepolia scripts/deploy-diamond.ts
- npx hardhat run --network base scripts/deploy-diamond.ts
+ ⚠️  LEGACY SCRIPT - FOR BACKUP PURPOSES ONLY ⚠️
+ 
+ This script uses the OLD Diamond structure (contracts/Diamond.sol, contracts/facets/*).
+ The project has been migrated to a NEW Diamond structure.
+ 
+ For NEW deployments, use:
+   npx hardhat run --network base_sepolia scripts/basevol/deploy-basevol-diamond.ts
+   npx hardhat run --network base scripts/basevol/deploy-basevol-diamond.ts
+ 
+ Only use this script if you specifically need to deploy using the legacy structure.
+ 
+ Original commands (LEGACY):
+   npx hardhat run --network base_sepolia scripts/deploy-diamond.ts
+   npx hardhat run --network base scripts/deploy-diamond.ts
 */
 const NETWORK = ["base_sepolia", "base"] as const;
 type SupportedNetwork = (typeof NETWORK)[number];
@@ -49,6 +62,35 @@ export async function deployDiamond(
   startTimestamp: number,
   intervalSeconds: number,
 ): Promise<DeployedAddresses> {
+  // Show legacy warning
+  console.log("\n" + "=".repeat(80));
+  console.log("⚠️  LEGACY DEPLOYMENT WARNING ⚠️");
+  console.log("=".repeat(80));
+  console.log("This script deploys using the LEGACY Diamond structure:");
+  console.log("  - contracts/Diamond.sol");
+  console.log("  - contracts/facets/*");
+  console.log("");
+  console.log("The project has been migrated to a NEW structure:");
+  console.log("  - contracts/diamond-common/");
+  console.log("  - contracts/basevol/");
+  console.log("");
+  console.log("For NEW deployments, please use:");
+  console.log("  npx hardhat run --network <network> scripts/basevol/deploy-basevol-diamond.ts");
+  console.log("=".repeat(80) + "\n");
+
+  const shouldContinue = await input({
+    message: "Are you sure you want to deploy using the LEGACY structure? (yes/no)",
+    default: "no",
+    validate: (val) => {
+      return ["yes", "no", "y", "n"].includes(val.toLowerCase()) || "Please enter yes or no";
+    },
+  });
+
+  if (!["yes", "y"].includes(shouldContinue.toLowerCase())) {
+    console.log("❌ Deployment cancelled by user");
+    process.exit(0);
+  }
+
   const [deployer] = await ethers.getSigners();
 
   console.log("Deploying Diamond with account:", deployer.address);

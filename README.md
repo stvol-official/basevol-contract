@@ -1,8 +1,47 @@
-# BaseVol:On Chain Short-term Vol market
+# BaseVol: On Chain Short-term Vol market
 
 ## Description
 
 Digital option market for crypto trade on 1 day price change
+
+## 🚨 Important Notice - Diamond Structure Migration
+
+**This project has been restructured using the Diamond Pattern!**
+
+### New Structure (After 2025-10-02)
+
+```
+contracts/
+├── diamond-common/      # Common Diamond infrastructure
+├── basevol/            # BaseVol Diamond (new structure)
+└── genesis-vault/      # GenesisVault Diamond
+
+scripts/
+├── basevol/            # BaseVol deployment and upgrade
+└── genesis-vault/      # GenesisVault deployment and upgrade
+```
+
+### ⚠️ Mainnet Contract Upgrade
+
+To upgrade the existing BaseVol Diamond deployed on mainnet:
+
+```bash
+# 1. Verify diamond state (optional)
+npx hardhat run --network base_sepolia scripts/basevol/verify-diamond-state.ts
+
+# 2. Verify compatibility (local - optional)
+npx hardhat run scripts/basevol/verify-compatibility.ts
+
+# 3. Test on Sepolia
+npx hardhat run --network base_sepolia scripts/basevol/upgrade-basevol-facet.ts
+
+# 4. Mainnet upgrade
+npx hardhat run --network base scripts/basevol/upgrade-basevol-facet.ts
+```
+
+📚 **For more details**: See [scripts/basevol/README.md](./scripts/basevol/README.md) and [scripts/basevol/OWNER_UPGRADE_GUIDE.md](./scripts/basevol/OWNER_UPGRADE_GUIDE.md)
+
+---
 
 ## Documentation
 

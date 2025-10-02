@@ -236,13 +236,14 @@ abstract contract GenesisManagedVault is
   /// @param user The user address
   /// @param newShares The amount of new shares being deposited
   /// @param currentSharePrice The current share price (scaled by share decimals)
+  /// @dev NOTE: This function should be called BEFORE _mint() is executed
   function _updateUserWAEP(address user, uint256 newShares, uint256 currentSharePrice) internal {
     GenesisVaultManagedVaultStorage.Layout storage $ = GenesisVaultManagedVaultStorage.layout();
     GenesisVaultManagedVaultStorage.UserPerformanceData storage userData = $.userPerformanceData[
       user
     ];
 
-    uint256 currentShares = balanceOf(user) - newShares; // Shares before this deposit
+    uint256 currentShares = balanceOf(user);
 
     if (currentShares == 0) {
       // First deposit: WAEP = current share price

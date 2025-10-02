@@ -4,47 +4,48 @@ import select from "@inquirer/select";
 import checkbox from "@inquirer/checkbox";
 
 /*
- ⚠️  LEGACY SCRIPT - FOR BACKUP PURPOSES ONLY ⚠️
- 
- This script upgrades facets using the OLD Diamond structure (contracts/facets/*).
- The project has been migrated to a NEW Diamond structure.
- 
- For NEW facet upgrades, use:
-   npx hardhat run --network base_sepolia scripts/basevol/upgrade-basevol-facet.ts
-   npx hardhat run --network base scripts/basevol/upgrade-basevol-facet.ts
- 
- Only use this script if you specifically need to upgrade using the legacy structure.
- 
- Original commands (LEGACY):
-   npx hardhat run --network base_sepolia scripts/upgrade-facet-generic.ts
-   npx hardhat run --network base scripts/upgrade-facet-generic.ts
+ npx hardhat run --network base_sepolia scripts/genesis-vault/upgrade-genesis-vault-facet.ts
+ npx hardhat run --network base scripts/genesis-vault/upgrade-genesis-vault-facet.ts
 */
 
 const NETWORK = ["base_sepolia", "base"] as const;
 type SupportedNetwork = (typeof NETWORK)[number];
 
-// Diamond addresses by network
-const DIAMOND_ADDRESSES = {
-  base_sepolia: "0x66ee6506eD99859d340690d98a92db239909DF89", // Update after deployment
+// Genesis Vault Diamond addresses by network
+const GENESIS_VAULT_ADDRESSES = {
+  base_sepolia: "0xbc4cdBb474597d26F997A55025F78d3aB8e258EA", // Update after deployment
   base: "", // Update after deployment
 };
 
-// Available facets for upgrade
+// Available Genesis Vault facets for upgrade
 const AVAILABLE_FACETS = [
-  { name: "RedemptionFacet", path: "contracts/facets/RedemptionFacet.sol:RedemptionFacet" },
   {
-    name: "OrderProcessingFacet",
-    path: "contracts/facets/OrderProcessingFacet.sol:OrderProcessingFacet",
+    name: "ERC20Facet",
+    path: "contracts/genesis-vault/facets/ERC20Facet.sol:ERC20Facet",
   },
   {
-    name: "RoundManagementFacet",
-    path: "contracts/facets/RoundManagementFacet.sol:RoundManagementFacet",
+    name: "GenesisVaultViewFacet",
+    path: "contracts/genesis-vault/facets/GenesisVaultViewFacet.sol:GenesisVaultViewFacet",
   },
-  { name: "AdminFacet", path: "contracts/facets/AdminFacet.sol:AdminFacet" },
-  { name: "ViewFacet", path: "contracts/facets/ViewFacet.sol:ViewFacet" },
   {
-    name: "InitializationFacet",
-    path: "contracts/facets/InitializationFacet.sol:InitializationFacet",
+    name: "GenesisVaultAdminFacet",
+    path: "contracts/genesis-vault/facets/GenesisVaultAdminFacet.sol:GenesisVaultAdminFacet",
+  },
+  {
+    name: "KeeperFacet",
+    path: "contracts/genesis-vault/facets/KeeperFacet.sol:KeeperFacet",
+  },
+  {
+    name: "VaultCoreFacet",
+    path: "contracts/genesis-vault/facets/VaultCoreFacet.sol:VaultCoreFacet",
+  },
+  {
+    name: "SettlementFacet",
+    path: "contracts/genesis-vault/facets/SettlementFacet.sol:SettlementFacet",
+  },
+  {
+    name: "GenesisVaultInitializationFacet",
+    path: "contracts/genesis-vault/facets/GenesisVaultInitializationFacet.sol:GenesisVaultInitializationFacet",
   },
 ];
 
@@ -76,13 +77,16 @@ interface FacetAnalysis {
   newFacetAddress: string;
 }
 
-function getSelectors(contract: any): string[] {
+function getSelectors(contractInterface: any, excludeSelectors: string[] = []): string[] {
   const signatures: string[] = [];
 
   // Iterate through all functions in the interface
-  contract.interface.forEachFunction((func: any) => {
-    if (func.name !== "init") {
-      signatures.push(func.selector);
+  contractInterface.forEachFunction((func: any) => {
+    if (func.name !== "init" && func.name !== "initialize") {
+      const selector = func.selector;
+      if (!excludeSelectors.includes(selector)) {
+        signatures.push(selector);
+      }
     }
   });
 
@@ -93,6 +97,24 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function waitForContractCode(
+  address: string,
+  retries: number = 5,
+  delayMs: number = 2000,
+): Promise<boolean> {
+  for (let i = 0; i < retries; i++) {
+    const code = await ethers.provider.getCode(address);
+    if (code !== "0x") {
+      return true;
+    }
+    if (i < retries - 1) {
+      console.log(`  ⏳ Waiting for contract code at ${address}... (attempt ${i + 1}/${retries})`);
+      await sleep(delayMs);
+    }
+  }
+  return false;
+}
+
 async function analyzeFacet(
   facetInfo: { name: string; path: string },
   diamondAddress: string,
@@ -100,17 +122,27 @@ async function analyzeFacet(
   console.log(`🔍 Analyzing ${facetInfo.name}...`);
 
   // 1. Deploy new facet and get selectors
-  const FacetFactory = await ethers.getContractFactory(facetInfo.name);
+  const FacetFactory = await ethers.getContractFactory(facetInfo.path);
   const newFacet = await FacetFactory.deploy();
   await newFacet.waitForDeployment();
   const newFacetAddress = await newFacet.getAddress();
-  const newSelectors = getSelectors(newFacet);
+
+  // Wait for contract code to be available on network
+  const hasCode = await waitForContractCode(newFacetAddress);
+  if (!hasCode) {
+    throw new Error(`New facet code not available at ${newFacetAddress}`);
+  }
+
+  const newSelectors = getSelectors(FacetFactory.interface);
 
   console.log(`📦 New ${facetInfo.name} deployed to: ${newFacetAddress}`);
   console.log(`🔢 New selectors (${newSelectors.length}): ${newSelectors.join(", ")}`);
 
   // 2. Check selectors registered in current Diamond
-  const diamondLoupe = await ethers.getContractAt("IDiamondLoupe", diamondAddress);
+  const diamondLoupe = await ethers.getContractAt(
+    "contracts/diamond-common/interfaces/IDiamondLoupe.sol:IDiamondLoupe",
+    diamondAddress,
+  );
   const currentFacets = await diamondLoupe.facets();
 
   // Map all currently registered selectors and their facet addresses
@@ -121,15 +153,11 @@ async function analyzeFacet(
     }
   }
 
-  // 3. Find selectors that existing facet had (from facet with same name)
+  // 3. Find selectors that existing facet had
   const existingSelectorsFromThisFacet: string[] = [];
-  const existingSelectorsFromOtherFacets: string[] = [];
 
   for (const selector of newSelectors) {
     if (currentSelectorToFacet.has(selector)) {
-      // Check which facet this selector is currently registered to
-      // For accurate judgment, we should know the address of the previously deployed same facet,
-      // but here we just check existence
       existingSelectorsFromThisFacet.push(selector);
     }
   }
@@ -140,12 +168,7 @@ async function analyzeFacet(
   );
 
   // 5. Find selectors to remove (existed before but not in new version)
-  // For this, we need to know the selectors of the previous version of the facet,
-  // but here we estimate selectors associated with this facet in current Diamond
   const removedSelectors: string[] = [];
-
-  // Simple heuristic: find selectors that are presumed to have been deployed with the same facet name
-  // A more accurate method would be to store previous deployment records, but here we judge only by current state
 
   console.log(
     `✅ Existing selectors (${existingSelectorsFromThisFacet.length}): ${existingSelectorsFromThisFacet.join(", ")}`,
@@ -175,9 +198,6 @@ async function analyzeFacet(
     });
   }
 
-  // Remove selectors (currently omitted as automatic detection is difficult)
-  // Process manually if needed or use separate config file
-
   return {
     name: facetInfo.name,
     newSelectors: newSelectorsToAdd,
@@ -189,34 +209,6 @@ async function analyzeFacet(
 }
 
 const main = async () => {
-  // Show legacy warning at the start
-  console.log("\n" + "=".repeat(80));
-  console.log("⚠️  LEGACY UPGRADE SCRIPT WARNING ⚠️");
-  console.log("=".repeat(80));
-  console.log("This script upgrades facets using the LEGACY Diamond structure:");
-  console.log("  - contracts/facets/*");
-  console.log("");
-  console.log("The project has migrated to a NEW Diamond structure:");
-  console.log("  - contracts/basevol/facets/*");
-  console.log("");
-  console.log("For NEW facet upgrades, please use:");
-  console.log("  npx hardhat run --network <network> scripts/basevol/upgrade-basevol-facet.ts");
-  console.log("=".repeat(80) + "\n");
-
-  const shouldContinue = await input({
-    message: "Are you sure you want to use the LEGACY upgrade script? (yes/no)",
-    default: "no",
-    validate: (val) => {
-      return ["yes", "no", "y", "n"].includes(val.toLowerCase()) || "Please enter yes or no";
-    },
-  });
-
-  if (!["yes", "y"].includes(shouldContinue.toLowerCase())) {
-    console.log("❌ Upgrade cancelled by user");
-    console.log("💡 Please use: scripts/basevol/upgrade-basevol-facet.ts");
-    process.exit(0);
-  }
-
   // Get network data from Hardhat config (see hardhat.config.ts).
   const networkName = network.name as SupportedNetwork;
 
@@ -226,13 +218,13 @@ const main = async () => {
     return;
   }
 
-  console.log(`🚀 Smart Diamond Facet Upgrade Tool for ${networkName} network`);
+  console.log(`🚀 Genesis Vault Facet Upgrade Tool for ${networkName} network`);
   console.log("This tool automatically detects changes and applies appropriate actions");
 
-  // 1. Enter Diamond address
+  // 1. Enter Genesis Vault Diamond address
   const DIAMOND_ADDRESS = await input({
-    message: "Enter the Diamond contract address",
-    default: DIAMOND_ADDRESSES[networkName] || "",
+    message: "Enter the Genesis Vault Diamond contract address",
+    default: GENESIS_VAULT_ADDRESSES[networkName] || "",
     validate: (val) => {
       return ethers.isAddress(val) || "Please enter a valid address";
     },
@@ -255,7 +247,7 @@ const main = async () => {
 
   console.log("===========================================");
   console.log("Network:", networkName);
-  console.log("Diamond Address:", DIAMOND_ADDRESS);
+  console.log("Genesis Vault Diamond Address:", DIAMOND_ADDRESS);
   console.log("Selected Facets:", selectedFacets.map((f: any) => f.name).join(", "));
   console.log("===========================================");
 
@@ -268,7 +260,7 @@ const main = async () => {
 
   console.log(`\n🔍 Analyzing ${selectedFacets.length} facet(s) for changes...\n`);
 
-  // 3. Analyze and deploy each facet
+  // 3. Analyze and deploy each facet (sequential to avoid nonce issues)
   const facetAnalyses: FacetAnalysis[] = [];
   let totalCuts: FacetCut[] = [];
 
@@ -361,21 +353,61 @@ const main = async () => {
     );
   });
 
-  const diamondCut = await ethers.getContractAt("IDiamondCut", DIAMOND_ADDRESS);
+  const diamondCut = await ethers.getContractAt(
+    "contracts/diamond-common/interfaces/IDiamondCut.sol:IDiamondCut",
+    DIAMOND_ADDRESS,
+  );
 
-  const tx = await diamondCut.diamondCut(totalCuts, ethers.ZeroAddress, "0x");
-  console.log("Diamond cut tx:", tx.hash);
+  try {
+    const tx = await diamondCut.diamondCut(totalCuts, ethers.ZeroAddress, "0x");
+    console.log("Diamond cut tx:", tx.hash);
 
-  const receipt = await tx.wait();
-  if (!receipt || receipt.status !== 1) {
-    throw Error(`Diamond upgrade failed: ${tx.hash}`);
+    const receipt = await tx.wait();
+    if (!receipt || receipt.status !== 1) {
+      throw Error(`Diamond upgrade failed: ${tx.hash}`);
+    }
+
+    console.log("✅ Diamond cut completed successfully!");
+  } catch (error: any) {
+    console.error("❌ Diamond cut failed:", error);
+
+    // Try to decode common revert reasons
+    if (error.data) {
+      try {
+        const iface = new ethers.Interface([
+          "error LibDiamond__NoSelectorsProvidedForFacetForCut(address facet)",
+          "error LibDiamond__CannotAddSelectorsToZeroAddress(bytes4[] selectors)",
+          "error LibDiamond__NoBytecodeAtAddress(address contractAddress, string message)",
+          "error LibDiamond__IncorrectFacetCutAction(uint8 action)",
+          "error LibDiamond__CannotAddFunctionToDiamondThatAlreadyExists(bytes4 selector)",
+          "error LibDiamond__CannotReplaceFunctionsFromFacetWithZeroAddress(bytes4[] selectors)",
+          "error LibDiamond__CannotReplaceImmutableFunction(bytes4 selector)",
+          "error LibDiamond__CannotReplaceFunctionWithTheSameFunctionFromTheSameFacet(bytes4 selector)",
+          "error LibDiamond__CannotReplaceFunctionThatDoesNotExists(bytes4 selector)",
+          "error LibDiamond__RemoveFacetAddressMustBeZeroAddress(address facetAddress)",
+          "error LibDiamond__CannotRemoveFunctionThatDoesNotExist(bytes4 selector)",
+          "error LibDiamond__CannotRemoveImmutableFunction(bytes4 selector)",
+          "error LibDiamond__InitializationFunctionReverted(address initializationContractAddress, bytes _calldata)",
+        ]);
+        const decodedError = iface.parseError(error.data);
+        console.error("Decoded error:", decodedError);
+      } catch (decodeError) {
+        console.error("Could not decode error data");
+      }
+    }
+    return;
   }
 
-  console.log("✅ Diamond cut completed successfully!");
+  // Wait for network propagation
+  console.log("\n⏳ Waiting for network state to propagate (3 seconds)...");
+  await sleep(3000);
 
   // 7. Verify upgrades
   console.log("\n🔍 Verifying upgrades...");
-  const diamondLoupe = await ethers.getContractAt("IDiamondLoupe", DIAMOND_ADDRESS);
+  const diamondLoupe = await ethers.getContractAt(
+    "contracts/diamond-common/interfaces/IDiamondLoupe.sol:IDiamondLoupe",
+    DIAMOND_ADDRESS,
+  );
 
   for (const analysis of facetAnalyses) {
     if (analysis.cuts.length === 0) continue;
@@ -408,8 +440,11 @@ const main = async () => {
 
     console.log(`Testing ${analysis.name}...`);
     try {
-      const facetContract = await ethers.getContractAt(analysis.name, DIAMOND_ADDRESS);
-      console.log(`✅ ${analysis.name} functions are accessible`);
+      const facetPath = AVAILABLE_FACETS.find((f) => f.name === analysis.name)?.path;
+      if (facetPath) {
+        const facetContract = await ethers.getContractAt(facetPath, DIAMOND_ADDRESS);
+        console.log(`✅ ${analysis.name} functions are accessible`);
+      }
     } catch (error) {
       console.log(`⚠️  Could not test ${analysis.name} functions:`, error);
     }
@@ -417,10 +452,11 @@ const main = async () => {
 
   // 9. Contract verification (if API key exists)
   console.log("\n🔍 Verifying contracts on block explorer...");
-  const apiKey = process.env.ALCHEMY_API_KEY;
+  const apiKey = process.env.BASESCAN_API_KEY;
 
   if (apiKey) {
-    await sleep(6000); // Wait for block explorer indexing
+    console.log("⏳ Waiting for block explorer indexing (6 seconds)...");
+    await sleep(6000);
 
     for (const analysis of facetAnalyses) {
       if (analysis.cuts.length === 0) continue;
@@ -428,33 +464,31 @@ const main = async () => {
       console.log(`Verifying ${analysis.name} contract...`);
 
       try {
-        const networkInfo = await ethers
-          .getDefaultProvider(
-            `https://base-${networkName === "base_sepolia" ? "sepolia" : "mainnet"}.g.alchemy.com/v2/${apiKey}`,
-          )
-          .getNetwork();
-
+        const facetPath = AVAILABLE_FACETS.find((f) => f.name === analysis.name)?.path;
         await run("verify:verify", {
           address: analysis.newFacetAddress,
-          network: networkInfo,
-          contract: AVAILABLE_FACETS.find((f) => f.name === analysis.name)?.path,
+          contract: facetPath,
           constructorArguments: [],
         });
         console.log(`✅ ${analysis.name} verification done`);
-      } catch (error) {
-        console.log(`❌ ${analysis.name} verification failed:`, error);
+      } catch (error: any) {
+        if (error.message.includes("Already Verified")) {
+          console.log(`✅ ${analysis.name} already verified`);
+        } else {
+          console.log(`❌ ${analysis.name} verification failed:`, error.message);
+        }
       }
     }
   } else {
-    console.log("⚠️  No ALCHEMY_API_KEY found, skipping block explorer verification");
+    console.log("⚠️  No BASESCAN_API_KEY found, skipping block explorer verification");
   }
 
   // 10. Final summary
   console.log("\n" + "=".repeat(60));
-  console.log("🎉 SMART FACET UPGRADE COMPLETED!");
+  console.log("🎉 GENESIS VAULT FACET UPGRADE COMPLETED!");
   console.log("=".repeat(60));
   console.log("Network:", networkName);
-  console.log("Diamond Address:", DIAMOND_ADDRESS);
+  console.log("Genesis Vault Diamond Address:", DIAMOND_ADDRESS);
   console.log(`Processed Facets: ${selectedFacets.length}`);
   console.log(`Total Operations: ${totalCuts.length}`);
 
@@ -486,4 +520,4 @@ if (require.main === module) {
   });
 }
 
-export { main as upgradeFacetGeneric };
+export { main as upgradeGenesisVaultFacet };
