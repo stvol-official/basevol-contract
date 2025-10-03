@@ -7,7 +7,7 @@ import config from "../../config";
 */
 const NETWORK = ["base_sepolia", "base"] as const;
 type SupportedNetwork = (typeof NETWORK)[number];
-const GENESIS_STRATEGY_ADDRESS = "0x91d9Cf3Ee90e757dA6B01E896BD60D281bc6E93a";
+const GENESIS_STRATEGY_ADDRESS = "0x8CEfaC7280a5a01EB025C5F7D36BBF1438C4e54B";
 
 const main = async () => {
   // Get network data from Hardhat config
@@ -58,7 +58,7 @@ const main = async () => {
     console.log("- ClearingHouse:", initParams[0]);
     console.log("- Strategy:", initParams[1]);
 
-    // 타입 캐스팅으로 수정
+    // Fixed with type casting
     const baseVolManager = (await upgrades.deployProxy(BaseVolManager, initParams, {
       kind: "uups",
       initializer: "initialize",
@@ -69,7 +69,7 @@ const main = async () => {
 
     console.log(`✅ BaseVolManager deployed at ${baseVolManagerAddress}`);
 
-    // 컨트랙트 검증
+    // Contract verification
     console.log("\n Verifying contract...");
     try {
       await run("verify:verify", {
@@ -82,7 +82,7 @@ const main = async () => {
       console.log("⚠️ Contract verification failed:", error);
     }
 
-    // 배포된 컨트랙트 정보 출력
+    // Print deployed contract information
     console.log("\n Deployment Summary:");
     console.log("===========================================");
     console.log("Contract: BaseVolManager");
@@ -94,19 +94,30 @@ const main = async () => {
     console.log("Strategy:", GENESIS_STRATEGY_ADDRESS);
     console.log("===========================================");
 
-    // 설정 확인
+    // Check configuration
     console.log("\n🔧 Contract Configuration:");
-    const maxStrategyDeposit = await baseVolManager.maxStrategyDeposit();
-    const minStrategyDeposit = await baseVolManager.minStrategyDeposit();
-    const maxTotalExposure = await baseVolManager.maxTotalExposure();
-    const rebalanceThreshold = await baseVolManager.rebalanceThreshold();
+    const [maxStrategyDeposit, minStrategyDeposit, maxTotalExposure] =
+      await baseVolManager.config();
+    const totalUtilized = await baseVolManager.totalUtilized();
+    const totalDeposited = await baseVolManager.totalDeposited();
 
     console.log("- Max Strategy Deposit:", ethers.formatUnits(maxStrategyDeposit, 6), "USDC");
     console.log("- Min Strategy Deposit:", ethers.formatUnits(minStrategyDeposit, 6), "USDC");
     console.log("- Max Total Exposure:", ethers.formatUnits(maxTotalExposure, 6), "USDC");
-    console.log("- Rebalance Threshold:", ethers.formatUnits(rebalanceThreshold, 18), "%");
+    console.log("- Total Utilized:", ethers.formatUnits(totalUtilized, 6), "USDC");
+    console.log("- Total Deposited:", ethers.formatUnits(totalDeposited, 6), "USDC");
 
     console.log("\n🎉 BaseVolManager deployment completed successfully!");
+
+    // Call setBaseVolManager on GenesisStrategy
+    console.log("\n🔧 Setting BaseVolManager on GenesisStrategy...");
+    const genesisStrategy = await ethers.getContractAt("GenesisStrategy", GENESIS_STRATEGY_ADDRESS);
+
+    const setBaseVolManagerTx = await genesisStrategy.setBaseVolManager(baseVolManagerAddress);
+    await setBaseVolManagerTx.wait();
+
+    console.log("✅ BaseVolManager set successfully on GenesisStrategy");
+    console.log("Transaction hash:", setBaseVolManagerTx.hash);
   } catch (error) {
     console.error("❌ Deployment failed:", error);
     throw error;

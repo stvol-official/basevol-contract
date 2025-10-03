@@ -13,7 +13,7 @@ type SupportedNetwork = (typeof NETWORK)[number];
 
 // Genesis Vault Diamond addresses by network
 const GENESIS_VAULT_ADDRESSES = {
-  base_sepolia: "0xbc4cdBb474597d26F997A55025F78d3aB8e258EA", // Update after deployment
+  base_sepolia: "0xb01777d4e6d9b01b6541a500e17be149f220e4de", // Update after deployment
   base: "", // Update after deployment
 };
 
@@ -450,38 +450,38 @@ const main = async () => {
     }
   }
 
-  // 9. Contract verification (if API key exists)
+  // 9. Contract verification on block explorer
   console.log("\n🔍 Verifying contracts on block explorer...");
-  const apiKey = process.env.BASESCAN_API_KEY;
+  console.log("⏳ Waiting for block explorer indexing (6 seconds)...");
+  await sleep(6000);
 
-  if (apiKey) {
-    console.log("⏳ Waiting for block explorer indexing (6 seconds)...");
-    await sleep(6000);
+  const networkInfo = await ethers.getDefaultProvider().getNetwork();
 
-    for (const analysis of facetAnalyses) {
-      if (analysis.cuts.length === 0) continue;
+  for (const analysis of facetAnalyses) {
+    if (analysis.cuts.length === 0) continue;
 
-      console.log(`Verifying ${analysis.name} contract...`);
+    console.log(`\n📝 Verifying ${analysis.name}...`);
 
-      try {
-        const facetPath = AVAILABLE_FACETS.find((f) => f.name === analysis.name)?.path;
-        await run("verify:verify", {
-          address: analysis.newFacetAddress,
-          contract: facetPath,
-          constructorArguments: [],
-        });
-        console.log(`✅ ${analysis.name} verification done`);
-      } catch (error: any) {
-        if (error.message.includes("Already Verified")) {
-          console.log(`✅ ${analysis.name} already verified`);
-        } else {
-          console.log(`❌ ${analysis.name} verification failed:`, error.message);
-        }
+    try {
+      const facetPath = AVAILABLE_FACETS.find((f) => f.name === analysis.name)?.path;
+      await run("verify:verify", {
+        address: analysis.newFacetAddress,
+        network: networkInfo,
+        contract: facetPath,
+        constructorArguments: [],
+      });
+      console.log(`✅ ${analysis.name} verified`);
+    } catch (error: any) {
+      if (error.message.includes("Already Verified")) {
+        console.log(`✅ ${analysis.name} already verified`);
+      } else {
+        console.log(`⚠️ ${analysis.name} verification failed:`, error.message);
       }
     }
-  } else {
-    console.log("⚠️  No BASESCAN_API_KEY found, skipping block explorer verification");
   }
+
+  console.log("\n✅ Contract verification process completed!");
+  console.log("Note: Some contracts may already be verified or may take time to be indexed.");
 
   // 10. Final summary
   console.log("\n" + "=".repeat(60));

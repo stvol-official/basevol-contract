@@ -7,8 +7,8 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-const DEPLOYED_PROXY = "0x91d9Cf3Ee90e757dA6B01E896BD60D281bc6E93a"; // for testnet - 실제 배포된 프록시 주소로 교체 필요
-// const DEPLOYED_PROXY = "0x..."; // for mainnet - 실제 배포된 프록시 주소로 교체 필요
+const DEPLOYED_PROXY = "0x8CEfaC7280a5a01EB025C5F7D36BBF1438C4e54B"; // for testnet - update with actual deployed proxy address
+// const DEPLOYED_PROXY = "0x..."; // for mainnet - update with actual deployed proxy address
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));

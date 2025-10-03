@@ -7,7 +7,7 @@ import config from "../../config";
 */
 const NETWORK = ["base_sepolia", "base"] as const;
 type SupportedNetwork = (typeof NETWORK)[number];
-const GENESIS_VAULT_ADDRESS = "0x2fe04E863A3B2D991a246c70F5FE6DbF46253581";
+const GENESIS_VAULT_ADDRESS = "0xb01777d4e6d9b01b6541a500e17be149f220e4de";
 
 const main = async () => {
   // Get network data from Hardhat config
@@ -65,15 +65,19 @@ const main = async () => {
     const network = await ethers.getDefaultProvider().getNetwork();
 
     console.log("Verifying contracts...");
-    await run("verify:verify", {
-      address: strategyContractAddress,
-      network: network,
-      contract: `contracts/core/vault/${contractName}.sol:${contractName}`,
-      constructorArguments: [],
-    });
-    console.log("verify the contractAction done");
+    try {
+      await run("verify:verify", {
+        address: strategyContractAddress,
+        network: network,
+        contract: `contracts/core/vault/${contractName}.sol:${contractName}`,
+        constructorArguments: [],
+      });
+      console.log("verify the contractAction done");
+    } catch (error) {
+      console.log("⚠️ Contract verification failed:", error);
+    }
 
-    // 배포된 컨트랙트 정보 출력
+    // Print deployed contract information
     console.log("\n Deployment Summary:");
     console.log("===========================================");
     console.log("Contract: GenesisStrategy");
@@ -85,12 +89,12 @@ const main = async () => {
     console.log("Vault:", GENESIS_VAULT_ADDRESS);
     console.log("===========================================");
 
-    // 설정 확인
+    // Check configuration
     console.log("\n🔧 Contract Configuration:");
     const maxUtilizePct = await strategyContract.maxUtilizePct();
     console.log("- Max Utilize Percentage:", ethers.formatUnits(maxUtilizePct, 18), "%");
 
-    // 추가 정보 출력
+    // Print additional information
     console.log("\n📊 Contract State:");
     console.log("- Strategy Status:", await strategyContract.strategyStatus());
     console.log("- Paused:", await strategyContract.paused());
@@ -104,6 +108,19 @@ const main = async () => {
     );
 
     console.log("\n🎉 GenesisStrategy deployment completed successfully!");
+
+    // Call setStrategy on GenesisVault Diamond
+    console.log("\n🔧 Setting strategy on GenesisVault Diamond...");
+    const genesisVault = await ethers.getContractAt(
+      "GenesisVaultAdminFacet",
+      GENESIS_VAULT_ADDRESS,
+    );
+
+    const setStrategyTx = await genesisVault.setStrategy(strategyContractAddress);
+    await setStrategyTx.wait();
+
+    console.log("✅ Strategy set successfully on GenesisVault Diamond");
+    console.log("Transaction hash:", setStrategyTx.hash);
   } else {
     console.log(`Deploying to ${networkName} network is not supported...`);
   }

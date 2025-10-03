@@ -599,6 +599,154 @@ const main = async () => {
   }
 
   console.log("\n🎉 Deployment completed successfully!");
+
+  // Verify contracts on block explorer
+  console.log("\n🔍 Verifying contracts on block explorer...");
+  const networkInfo = await ethers.getDefaultProvider().getNetwork();
+
+  try {
+    // Verify Diamond
+    console.log("\n📝 Verifying Diamond...");
+    await run("verify:verify", {
+      address: diamondAddress,
+      network: networkInfo,
+      contract: "contracts/diamond-common/Diamond.sol:Diamond",
+      constructorArguments: [deployer.address, facets.diamondCutFacet],
+    });
+    console.log("✅ Diamond verified");
+  } catch (error: any) {
+    console.log("⚠️ Diamond verification failed:", error.message);
+  }
+
+  try {
+    // Verify DiamondCutFacet
+    console.log("\n📝 Verifying DiamondCutFacet...");
+    await run("verify:verify", {
+      address: facets.diamondCutFacet,
+      network: networkInfo,
+      contract: "contracts/diamond-common/facets/DiamondCutFacet.sol:DiamondCutFacet",
+      constructorArguments: [],
+    });
+    console.log("✅ DiamondCutFacet verified");
+  } catch (error: any) {
+    console.log("⚠️ DiamondCutFacet verification failed:", error.message);
+  }
+
+  try {
+    // Verify DiamondLoupeFacet
+    console.log("\n📝 Verifying DiamondLoupeFacet...");
+    await run("verify:verify", {
+      address: facets.diamondLoupeFacet,
+      network: networkInfo,
+      contract: "contracts/diamond-common/facets/DiamondLoupeFacet.sol:DiamondLoupeFacet",
+      constructorArguments: [],
+    });
+    console.log("✅ DiamondLoupeFacet verified");
+  } catch (error: any) {
+    console.log("⚠️ DiamondLoupeFacet verification failed:", error.message);
+  }
+
+  try {
+    // Verify ERC20Facet
+    console.log("\n📝 Verifying ERC20Facet...");
+    await run("verify:verify", {
+      address: facets.erc20Facet,
+      network: networkInfo,
+      contract: "contracts/genesis-vault/facets/ERC20Facet.sol:ERC20Facet",
+      constructorArguments: [],
+    });
+    console.log("✅ ERC20Facet verified");
+  } catch (error: any) {
+    console.log("⚠️ ERC20Facet verification failed:", error.message);
+  }
+
+  try {
+    // Verify GenesisVaultViewFacet
+    console.log("\n📝 Verifying GenesisVaultViewFacet...");
+    await run("verify:verify", {
+      address: facets.genesisVaultViewFacet,
+      network: networkInfo,
+      contract: "contracts/genesis-vault/facets/GenesisVaultViewFacet.sol:GenesisVaultViewFacet",
+      constructorArguments: [],
+    });
+    console.log("✅ GenesisVaultViewFacet verified");
+  } catch (error: any) {
+    console.log("⚠️ GenesisVaultViewFacet verification failed:", error.message);
+  }
+
+  try {
+    // Verify GenesisVaultAdminFacet
+    console.log("\n📝 Verifying GenesisVaultAdminFacet...");
+    await run("verify:verify", {
+      address: facets.genesisVaultAdminFacet,
+      network: networkInfo,
+      contract: "contracts/genesis-vault/facets/GenesisVaultAdminFacet.sol:GenesisVaultAdminFacet",
+      constructorArguments: [],
+    });
+    console.log("✅ GenesisVaultAdminFacet verified");
+  } catch (error: any) {
+    console.log("⚠️ GenesisVaultAdminFacet verification failed:", error.message);
+  }
+
+  try {
+    // Verify KeeperFacet
+    console.log("\n📝 Verifying KeeperFacet...");
+    await run("verify:verify", {
+      address: facets.keeperFacet,
+      network: networkInfo,
+      contract: "contracts/genesis-vault/facets/KeeperFacet.sol:KeeperFacet",
+      constructorArguments: [],
+    });
+    console.log("✅ KeeperFacet verified");
+  } catch (error: any) {
+    console.log("⚠️ KeeperFacet verification failed:", error.message);
+  }
+
+  try {
+    // Verify VaultCoreFacet
+    console.log("\n📝 Verifying VaultCoreFacet...");
+    await run("verify:verify", {
+      address: facets.vaultCoreFacet,
+      network: networkInfo,
+      contract: "contracts/genesis-vault/facets/VaultCoreFacet.sol:VaultCoreFacet",
+      constructorArguments: [],
+    });
+    console.log("✅ VaultCoreFacet verified");
+  } catch (error: any) {
+    console.log("⚠️ VaultCoreFacet verification failed:", error.message);
+  }
+
+  try {
+    // Verify SettlementFacet
+    console.log("\n📝 Verifying SettlementFacet...");
+    await run("verify:verify", {
+      address: facets.settlementFacet,
+      network: networkInfo,
+      contract: "contracts/genesis-vault/facets/SettlementFacet.sol:SettlementFacet",
+      constructorArguments: [],
+    });
+    console.log("✅ SettlementFacet verified");
+  } catch (error: any) {
+    console.log("⚠️ SettlementFacet verification failed:", error.message);
+  }
+
+  try {
+    // Verify InitializationFacet
+    console.log("\n📝 Verifying GenesisVaultInitializationFacet...");
+    await run("verify:verify", {
+      address: facets.initializationFacet,
+      network: networkInfo,
+      contract:
+        "contracts/genesis-vault/facets/GenesisVaultInitializationFacet.sol:GenesisVaultInitializationFacet",
+      constructorArguments: [],
+    });
+    console.log("✅ GenesisVaultInitializationFacet verified");
+  } catch (error: any) {
+    console.log("⚠️ GenesisVaultInitializationFacet verification failed:", error.message);
+  }
+
+  console.log("\n✅ Contract verification process completed!");
+  console.log("Note: Some contracts may already be verified or may take time to be indexed.");
 };
 
 main().catch((error) => {
