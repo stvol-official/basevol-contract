@@ -296,6 +296,29 @@ contract GenesisStrategy is
       uint256 maxUtilization = idleAssets.mulDiv(maxUtilizePct(), FLOAT_PRECISION);
 
       if (maxUtilization > 0 && strategyStatus() != StrategyStatus.EMERGENCY) {
+        // If Morpho is not set, check if BaseVol is already properly allocated
+        if (address($.morphoVaultManager) == address(0)) {
+          uint256 currentBaseVol = getBaseVolAssets();
+          uint256 totalAssets = currentBaseVol + idleAssets;
+
+          // If BaseVol has assets, check if allocation ratio is appropriate
+          if (currentBaseVol > 0) {
+            uint256 baseVolRatio = (currentBaseVol * FLOAT_PRECISION) / totalAssets;
+
+            // Check if BaseVol ratio is within acceptable range (±5% of target)
+            uint256 lowerBound = $.baseVolTargetPct > 0.05 ether
+              ? $.baseVolTargetPct - 0.05 ether
+              : 0;
+            uint256 upperBound = $.baseVolTargetPct + 0.05 ether;
+
+            if (baseVolRatio >= lowerBound && baseVolRatio <= upperBound) {
+              // Already properly allocated, waiting for Morpho to be set
+              emit KeeperAction("PROPERLY_ALLOCATED_WAITING_FOR_MORPHO", idleAssets);
+              return;
+            }
+          }
+        }
+
         _utilizeNewFunds(maxUtilization);
         emit KeeperAction("UTILIZE_NEW_FUNDS", maxUtilization);
         return;
@@ -900,10 +923,8 @@ contract GenesisStrategy is
     if (toMorpho > 0 && address($.morphoVaultManager) != address(0)) {
       IERC20(asset()).safeTransferFrom(address(vault()), address($.morphoVaultManager), toMorpho);
       $.morphoVaultManager.depositToMorpho(toMorpho);
-    } else {
-      // If no Morpho manager, add to BaseVol
-      toBaseVol += toMorpho;
     }
+    // Note: If Morpho manager is not set, toMorpho amount stays idle in vault
 
     // Deposit to BaseVol
     if (toBaseVol > 0) {
