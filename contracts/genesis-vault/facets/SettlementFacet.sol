@@ -81,11 +81,13 @@ contract SettlementFacet {
     roundData.settlementTimestamp = block.timestamp;
     emit RoundSettled(epoch, sharePrice);
 
-    // Process round settlement including liquidity management
-    _processRoundSettlement(epoch);
-
-    // Process management fee
+    // CRITICAL: Process management fee BEFORE minting new shares
+    // This ensures management fee is only charged on shares that existed during the period
     _mintManagementFeeShares();
+
+    // Process round settlement including liquidity management
+    // This will mint new shares to depositors
+    _processRoundSettlement(epoch);
   }
 
   // ============ Internal Settlement Logic ============
@@ -385,11 +387,22 @@ contract SettlementFacet {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     LibGenesisVaultStorage.ManagementFeeData storage feeData = s.managementFeeData;
 
-    uint256 currentTotalSupply = s.totalSupply;
+    // Management fee should be calculated on shares that existed during the period
+    // This includes pending redeem shares (which were burned at requestRedeem but still exist logically)
+    uint256 currentTotalSupply = s.totalSupply + _totalPendingRedeemShares();
     if (currentTotalSupply == 0) return;
 
     uint256 timeElapsed = block.timestamp - feeData.lastFeeTimestamp;
     if (timeElapsed == 0) return;
+
+    // Skip fee collection if this is the first round after deposits
+    // (no shares existed during the time period being charged)
+    if (feeData.totalFeesCollected == 0) {
+      // First time - just update timestamp and skip fee minting
+      // This prevents charging management fees for the period before any shares existed
+      feeData.lastFeeTimestamp = block.timestamp;
+      return;
+    }
 
     // Calculate fee rate based on elapsed time
     uint256 feeRate = (s.managementFee * timeElapsed) / (365 days);
