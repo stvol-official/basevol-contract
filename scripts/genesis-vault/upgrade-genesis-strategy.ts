@@ -7,7 +7,7 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-const DEPLOYED_PROXY = "0x8CEfaC7280a5a01EB025C5F7D36BBF1438C4e54B"; // for testnet - update with actual deployed proxy address
+const DEPLOYED_PROXY = "0x6F5B12b9b041BC76e8B680219BD2d67c62F95972"; // for testnet - update with actual deployed proxy address
 // const DEPLOYED_PROXY = "0x..."; // for mainnet - update with actual deployed proxy address
 
 function sleep(ms: number) {

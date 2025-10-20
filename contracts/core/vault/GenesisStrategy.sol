@@ -971,7 +971,7 @@ contract GenesisStrategy is
 
     if (success) {
       // Check the actual ClearingHouse balance for profit/loss calculation
-      uint256 actualClearingHouseBalance = $.baseVolManager.totalClearingHouseBalance();
+      uint256 actualClearingHouseBalance = $.baseVolManager.totalClearingHouseBalance() + amount;
 
       // Update utilizedAssets considering profit or loss
       if (actualClearingHouseBalance != $.strategyBalance) {
