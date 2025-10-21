@@ -988,7 +988,11 @@ contract ClearingHouse is
     uint256 balanceAmount = $.productEscrowBalances[product][epoch][user][idx];
     if (balanceAmount > 0) {
       $.userBalances[user] += amountAfterFee;
-      $.userEscrowBalances[user] -= balanceAmount;
+      if ($.userEscrowBalances[user] >= balanceAmount) {
+        $.userEscrowBalances[user] -= balanceAmount;
+      } else {
+        $.userEscrowBalances[user] = 0;
+      }
       if (fee > 0) {
         $.treasuryAmount += fee;
       }
@@ -1031,7 +1035,11 @@ contract ClearingHouse is
       if ($.productEscrowBalances[product][epoch][loser][idx] < remainingAmount)
         revert InsufficientBalance();
       $.productEscrowBalances[product][epoch][loser][idx] -= remainingAmount;
-      $.userEscrowBalances[loser] -= remainingAmount;
+      if ($.userEscrowBalances[loser] >= remainingAmount) {
+        $.userEscrowBalances[loser] -= remainingAmount;
+      } else {
+        $.userEscrowBalances[loser] = 0;
+      }
     }
 
     // Transfer amount after fee to winner
