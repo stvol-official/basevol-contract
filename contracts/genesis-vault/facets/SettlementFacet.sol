@@ -149,10 +149,13 @@ contract SettlementFacet {
    * @notice Process epoch settlement including liquidity management
    */
   function _processRoundSettlement(uint256 epoch) internal {
+    // 0. Withdraw all BaseVol assets for clean accounting
+    _withdrawBaseVolForSettlement();
+
     // 1. Calculate required assets for redemptions in this epoch
     uint256 requiredRedeemAssets = _calculateRoundRedeemAssets(epoch);
 
-    // 2. Check current available assets
+    // 2. Check current available assets (now includes withdrawn BaseVol)
     uint256 availableAssets = LibGenesisVault.idleAssets();
 
     // 3. Request liquidity from strategy if insufficient
@@ -196,6 +199,29 @@ contract SettlementFacet {
 
     // Use round-specific share price for accurate asset calculation
     return (claimableShares * roundData.sharePrice) / (10 ** s.decimals);
+  }
+
+  /**
+   * @notice Withdraw all BaseVol assets for settlement accounting
+   */
+  function _withdrawBaseVolForSettlement() internal {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    address strategyAddr = s.strategy;
+
+    if (strategyAddr == address(0)) {
+      return;
+    }
+
+    try IGenesisStrategy(strategyAddr).withdrawAllBaseVolForSettlement() {
+      emit StrategyLiquidityRequested(0); // 0 indicates full BaseVol withdrawal for settlement
+    } catch Error(string memory reason) {
+      emit StrategyLiquidityRequestFailed(
+        0,
+        string(abi.encodePacked("BaseVol settlement withdrawal failed: ", reason))
+      );
+    } catch {
+      emit StrategyLiquidityRequestFailed(0, "BaseVol settlement withdrawal failed: Unknown error");
+    }
   }
 
   /**

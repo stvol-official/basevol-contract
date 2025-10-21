@@ -225,7 +225,7 @@ contract GenesisVault is GenesisManagedVault, IERC7540 {
     // 1. all shares should be redeemed.
     // 2. utilized assets should be zero that means all requests have been processed.
     // 3. All assets should be withdrawn from strategy and no pending requests should remain.
-    require(totalSupply() == 0 && IGenesisStrategy(strategy()).utilizedAssets() == 0);
+    require(totalSupply() == 0 && IGenesisStrategy(strategy()).totalAssetsUnderManagement() == 0);
 
     // sweep idle assets
     IERC20(asset()).safeTransfer(receiver, idleAssets());

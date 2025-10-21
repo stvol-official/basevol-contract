@@ -44,18 +44,20 @@ interface IGenesisStrategy {
   function unpause() external;
 
   /**
-   * @notice Returns the total amount of assets currently utilized by the strategy
-   * @return The amount of utilized assets
-   */
-  function utilizedAssets() external view returns (uint256);
-
-  /**
    * @notice Returns the total assets under management including idle assets in strategy
    * @dev This includes strategy idle assets + BaseVol assets + Morpho assets (real-time)
    * @return Total assets managed by this strategy
    */
   function totalAssetsUnderManagement() external view returns (uint256);
 
+  /**
+   * @notice Returns the breakdown of assets under management by location
+   * @dev Returns three separate values for different asset locations
+   * @return strategyIdleAssets The amount of idle assets held in the strategy contract
+   * @return baseVolAssets The amount of assets deployed in BaseVol
+   * @return morphoAssets The amount of assets deployed in Morpho
+   */
+  function assetsUnderManagement() external view returns (uint256, uint256, uint256);
   /**
    * @notice Processes assets that are pending withdrawal
    * @dev This function handles the withdrawal queue and processes pending requests
@@ -68,6 +70,13 @@ interface IGenesisStrategy {
    * @param amountNeeded The amount of liquidity needed by the vault
    */
   function provideLiquidityForWithdrawals(uint256 amountNeeded) external;
+
+  /**
+   * @notice Withdraws all BaseVol assets to idle for round settlement accounting
+   * @dev Called by vault during round settlement to ensure clean accounting per round
+   * @dev Only withdraws withdrawable assets (excludes escrowed funds)
+   */
+  function withdrawAllBaseVolForSettlement() external;
 
   /**
    * @notice Callback function called when a deposit operation completes
@@ -110,4 +119,12 @@ interface IGenesisStrategy {
    * @return The current strategy balance
    */
   function strategyBalance() external view returns (uint256);
+
+  /**
+   * @notice Reset strategyBalance to match current real assets
+   * @dev Emergency function to fix incorrect strategyBalance
+   * @dev Only callable by owner when strategy is idle
+   * @dev This will reset PnL tracking to zero
+   */
+  function resetStrategyBalance() external;
 }

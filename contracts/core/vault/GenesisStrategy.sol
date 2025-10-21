@@ -54,10 +54,17 @@ contract GenesisStrategy is
     uint256 targetBaseVol
   );
 
-  event MaxUtilizePctUpdated(address indexed account, uint256 newPct);
   event Stopped(address indexed account);
   event LossDetected(uint256 lossAmount, uint256 lossPercentage, string severity);
-  event EmergencyWithdraw(uint256 amount, uint256 remainingBalance);
+  event StrategyBalanceReset(
+    uint256 oldStrategyBalance,
+    uint256 newStrategyBalance,
+    uint256 oldBaseVolBalance,
+    uint256 newBaseVolBalance,
+    uint256 oldMorphoBalance,
+    uint256 newMorphoBalance
+  );
+
   event DebugLog(string message);
 
   /// @dev Authorize caller if it is authorized one.
@@ -110,64 +117,10 @@ contract GenesisStrategy is
     $.clearingHouse = IClearingHouse(_clearingHouse);
     $.operator = _operator;
 
-    _setMaxUtilizePct(1 ether); // no cap by default(100%)
-
     // Set default target allocations: 90% Morpho, 10% BaseVol
     $.morphoTargetPct = 0.9 ether; // 90%
     $.baseVolTargetPct = 0.1 ether; // 10%
     $.rebalanceThreshold = 0.05 ether; // 5% threshold
-  }
-
-  function utilize(uint256 amount) public authCaller(operator()) nonReentrant {
-    _utilize(amount);
-  }
-
-  /// @notice Utilizes assets from Vault to ClearingHouse for BaseVol orders.
-  /// @dev Uses assets in vault. Callable only by the operator.
-  /// @param amount The underlying asset amount to be utilized.
-  function _utilize(uint256 amount) internal whenIdle {
-    _setStrategyStatus(StrategyStatus.UTILIZING);
-
-    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-    IGenesisVault _vault = $.vault;
-
-    if (amount == 0) {
-      revert ZeroAmountUtilization();
-    }
-
-    uint256 maxUtilization = _vault.idleAssets().mulDiv(maxUtilizePct(), FLOAT_PRECISION);
-    emit DebugLog(
-      string(abi.encodePacked("Max utilization calculated: ", maxUtilization.toString()))
-    );
-
-    if (amount > maxUtilization) {
-      emit DebugLog(
-        string(
-          abi.encodePacked(
-            "Amount adjusted from ",
-            amount.toString(),
-            " to ",
-            maxUtilization.toString()
-          )
-        )
-      );
-      amount = maxUtilization;
-    }
-
-    if (amount == 0) {
-      revert ZeroAmountUtilization();
-    }
-
-    IERC20 _asset = $.asset;
-    emit DebugLog(
-      string(
-        abi.encodePacked("Transferring ", amount.toString(), " assets from vault to baseVolManager")
-      )
-    );
-    _asset.safeTransferFrom(address(_vault), address(baseVolManager()), amount);
-
-    $.baseVolManager.depositToClearingHouse(amount);
-    emit DebugLog("_utilize function completed successfully");
   }
 
   /// @notice Callback function called by BaseVolManager after deposit completion
@@ -181,8 +134,8 @@ contract GenesisStrategy is
     if (success) {
       // Update strategy state
       GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-      $.utilizedAssets += amount;
       $.strategyBalance += amount;
+      $.baseVolInitialBalance += amount; // Track for profit/loss calculation
       emit BaseVolUtilize(_msgSender(), amount);
     }
 
@@ -194,139 +147,128 @@ contract GenesisStrategy is
     }
   }
 
-  /// @notice Deutilizes assets from ClearingHouse back to Vault.
-  /// @dev Callable only by the operator.
-  function deutilize() public authCaller(operator()) nonReentrant {
-    _deutilize();
-  }
-
-  /// @notice Internal deutilize function for internal calls
+  /// @notice Withdraws all assets from BaseVol and Morpho and transfers them to Vault
+  /// @dev Called when stop() is invoked to retrieve all deployed assets
+  /// @dev Withdraws from both BaseVol (ClearingHouse) and Morpho Vault
+  /// @dev All assets (including idle) are transferred to Vault via callbacks
   function _deutilize() internal whenIdle {
     _setStrategyStatus(StrategyStatus.DEUTILIZING);
 
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-    uint256 currentBalance = $.baseVolManager.totalClearingHouseBalance();
-    uint256 withdrawAmount = _calculateWithdrawAmount(currentBalance);
 
-    // check if total strategy loss is greater than 30%
-    uint256 totalCurrentBalance = getTotalUtilizedAssets();
-    uint256 totalInitialBalance = $.strategyBalance + getMorphoAssets();
-    if (totalCurrentBalance < totalInitialBalance) {
-      uint256 lossPercentage = ((totalInitialBalance - totalCurrentBalance) * FLOAT_PRECISION) /
-        totalInitialBalance;
-      if (lossPercentage > 0.3 ether) {
-        _setStrategyStatus(StrategyStatus.EMERGENCY);
+    // 1. Withdraw all assets from BaseVol (ClearingHouse)
+    // Assets will be transferred to Vault in baseVolWithdrawCompletedCallback
+    uint256 baseVolBalance = $.baseVolManager.totalClearingHouseBalance();
+    if (baseVolBalance > 0) {
+      $.baseVolManager.withdrawFromClearingHouse(baseVolBalance);
+    }
+
+    // 2. Withdraw all assets from Morpho Vault (if configured)
+    // Assets will be transferred to Vault in morphoWithdrawCompletedCallback
+    if (address($.morphoVaultManager) != address(0)) {
+      uint256 morphoBalance = getMorphoAssets();
+      if (morphoBalance > 0) {
+        $.morphoVaultManager.withdrawFromMorpho(morphoBalance);
       }
     }
 
-    if (withdrawAmount == 0) {
-      if (strategyStatus() != StrategyStatus.EMERGENCY) {
-        _setStrategyStatus(StrategyStatus.IDLE);
-      }
-      return;
-    }
-    $.baseVolManager.withdrawFromClearingHouse(withdrawAmount);
-  }
-
-  function _calculateWithdrawAmount(uint256 currentBalance) internal view returns (uint256) {
-    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-
-    if (currentBalance < $.strategyBalance) {
-      uint256 loss = $.strategyBalance - currentBalance;
-      uint256 lossPercentage = (loss * FLOAT_PRECISION) / $.strategyBalance;
-
-      if (lossPercentage <= 0.3 ether) {
-        return 0;
-      } else {
-        // if loss is greater than 30%, withdraw all assets
-        return currentBalance;
-      }
+    // 3. Transfer any existing idle assets to Vault immediately
+    uint256 idleBalance = getStrategyIdleAssets();
+    if (idleBalance > 0) {
+      IERC20(asset()).safeTransfer(address($.vault), idleBalance);
+      emit DebugLog(
+        string(abi.encodePacked("Transferred ", idleBalance.toString(), " idle assets to vault"))
+      );
     }
 
-    if (currentBalance > $.strategyBalance) {
-      return currentBalance - $.strategyBalance;
+    // 4. If no async withdrawals are pending, set status to IDLE
+    if (
+      baseVolBalance == 0 && (address($.morphoVaultManager) == address(0) || getMorphoAssets() == 0)
+    ) {
+      _setStrategyStatus(StrategyStatus.IDLE);
     }
-    return 0;
   }
 
   /*//////////////////////////////////////////////////////////////
                             KEEPER LOGIC   
     //////////////////////////////////////////////////////////////*/
 
-  /// @notice Keeper-only rebalancing function - automatically performs appropriate actions based on the situation
+  /// @notice Keeper-only rebalancing function - rebalances all assets to target allocation
   /// @dev Only callable by Operator and can only be executed in IDLE state
-  /// @dev Priority: 1) Process withdrawal requests, 2) Deutilize according to strategy logic, 3) Rebalance allocations, 4) Utilize new funds
+  /// @dev Called after round settlement to rebalance all assets including idle assets
+  /// @dev If Morpho is configured: 10% BaseVol, 90% Morpho
+  /// @dev If Morpho is NOT configured: 10% BaseVol, 90% idle (waiting for Morpho)
   function keeperRebalance() external authCaller(operator()) whenIdle nonReentrant {
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
     IGenesisVault _vault = $.vault;
 
-    // Priority 1: Handle immediate withdraw requests first (claimable = settled but unclaimed)
-    uint256 claimableWithdraw = _vault.totalClaimableWithdraw();
-    uint256 availableInStrategy = getStrategyIdleAssets();
+    // First, transfer all vault idle assets to strategy
+    uint256 vaultIdleAssets = _vault.idleAssets();
+    if (vaultIdleAssets > 0) {
+      IERC20 _asset = $.asset;
+      _asset.safeTransferFrom(address(_vault), address(this), vaultIdleAssets);
+      emit DebugLog(
+        string(
+          abi.encodePacked(
+            "Transferred ",
+            vaultIdleAssets.toString(),
+            " idle assets from vault to strategy"
+          )
+        )
+      );
+    }
 
-    if (claimableWithdraw > availableInStrategy) {
-      // Need to deutilize to fulfill immediate withdraw requests
-      _deutilizeForWithdrawals(claimableWithdraw - availableInStrategy);
-      emit KeeperAction("DEUTILIZE_FOR_WITHDRAW", claimableWithdraw);
+    // Get current total assets under management
+    uint256 currentBaseVol = getBaseVolAssets();
+    uint256 currentMorpho = getMorphoAssets();
+    uint256 idleAssets = getStrategyIdleAssets();
+
+    // Calculate total assets including idle
+    uint256 totalAssets = currentBaseVol + currentMorpho + idleAssets;
+
+    if (totalAssets == 0) {
+      emit KeeperAction("NO_ASSETS_TO_REBALANCE", 0);
       return;
     }
 
-    // Priority 2: Check if we need to deutilize due to BaseVol strategy logic
-    uint256 currentBalance = $.baseVolManager.totalClearingHouseBalance();
-    if ($.strategyBalance > 0 && currentBalance > 0) {
-      uint256 withdrawAmount = _calculateWithdrawAmount(currentBalance);
-      if (withdrawAmount > 0) {
-        _deutilize();
-        emit KeeperAction("DEUTILIZE_STRATEGY_LOGIC", withdrawAmount);
-        return;
-      }
-    }
+    // Calculate target allocations (10% BaseVol, 90% Morpho/idle)
+    uint256 targetBaseVol = totalAssets.mulDiv($.baseVolTargetPct, FLOAT_PRECISION);
+    uint256 targetMorpho = totalAssets - targetBaseVol;
 
-    // Priority 3: Check if rebalancing is needed between Morpho and BaseVol
-    (bool needsRebalance, uint256 morphoDiff, uint256 baseVolDiff) = shouldRebalance();
-    if (needsRebalance && address($.morphoVaultManager) != address(0)) {
-      _performRebalancing();
-      emit KeeperAction("REBALANCE_ALLOCATIONS", morphoDiff + baseVolDiff);
-      return;
-    }
+    bool morphoConfigured = address($.morphoVaultManager) != address(0);
 
-    // Priority 4: Utilize new funds if available
-    uint256 idleAssets = _vault.idleAssets();
-    if (idleAssets > 0) {
-      uint256 maxUtilization = idleAssets.mulDiv(maxUtilizePct(), FLOAT_PRECISION);
+    emit DebugLog(
+      string(
+        abi.encodePacked(
+          "Rebalancing: Total=",
+          totalAssets.toString(),
+          " Idle=",
+          idleAssets.toString(),
+          " CurrentBV=",
+          currentBaseVol.toString(),
+          " CurrentM=",
+          currentMorpho.toString(),
+          " TargetBV=",
+          targetBaseVol.toString(),
+          " TargetM=",
+          targetMorpho.toString(),
+          " MorphoConfigured=",
+          morphoConfigured ? "true" : "false"
+        )
+      )
+    );
 
-      if (maxUtilization > 0 && strategyStatus() != StrategyStatus.EMERGENCY) {
-        // If Morpho is not set, check if BaseVol is already properly allocated
-        if (address($.morphoVaultManager) == address(0)) {
-          uint256 currentBaseVol = getBaseVolAssets();
-          uint256 totalAssets = currentBaseVol + idleAssets;
+    // Execute rebalancing
+    _executeRebalancing(
+      currentBaseVol,
+      currentMorpho,
+      targetBaseVol,
+      targetMorpho,
+      idleAssets,
+      morphoConfigured
+    );
 
-          // If BaseVol has assets, check if allocation ratio is appropriate
-          if (currentBaseVol > 0) {
-            uint256 baseVolRatio = (currentBaseVol * FLOAT_PRECISION) / totalAssets;
-
-            // Check if BaseVol ratio is within acceptable range (±5% of target)
-            uint256 lowerBound = $.baseVolTargetPct > 0.05 ether
-              ? $.baseVolTargetPct - 0.05 ether
-              : 0;
-            uint256 upperBound = $.baseVolTargetPct + 0.05 ether;
-
-            if (baseVolRatio >= lowerBound && baseVolRatio <= upperBound) {
-              // Already properly allocated, waiting for Morpho to be set
-              emit KeeperAction("PROPERLY_ALLOCATED_WAITING_FOR_MORPHO", idleAssets);
-              return;
-            }
-          }
-        }
-
-        _utilizeNewFunds(maxUtilization);
-        emit KeeperAction("UTILIZE_NEW_FUNDS", maxUtilization);
-        return;
-      }
-    }
-
-    // No action needed
-    emit KeeperAction("NO_ACTION", 0);
+    emit KeeperAction("REBALANCE_COMPLETED", totalAssets);
   }
 
   /// @notice Processes idle assets for the withdraw requests.
@@ -338,6 +280,34 @@ contract GenesisStrategy is
     if (_assetsToWithdraw > 0) {
       IERC20(_asset).safeTransfer(vault(), _assetsToWithdraw);
     }
+  }
+
+  /// @notice Withdraws all BaseVol assets to idle for round settlement accounting
+  /// @dev Only callable by vault during settlement for clean per-round accounting
+  /// @dev Only withdraws withdrawable assets (excludes escrowed funds)
+  function withdrawAllBaseVolForSettlement() external authCaller(vault()) whenIdle nonReentrant {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+
+    // Get withdrawable BaseVol assets (excludes escrowed funds)
+    uint256 withdrawableAmount = getWithdrawableBaseVolAssets();
+
+    if (withdrawableAmount == 0) {
+      emit DebugLog("No withdrawable BaseVol assets for settlement");
+      return;
+    }
+
+    emit DebugLog(
+      string(
+        abi.encodePacked("Withdrawing all BaseVol for settlement: ", withdrawableAmount.toString())
+      )
+    );
+
+    // Mark as settlement withdrawal (not for rebalancing or user withdrawals)
+    _setStrategyStatus(StrategyStatus.DEUTILIZING);
+    $.isSettlementWithdrawal = true;
+
+    // Withdraw all withdrawable BaseVol assets
+    $.baseVolManager.withdrawFromClearingHouse(withdrawableAmount);
   }
 
   /// @notice Provides liquidity for vault withdrawal requests by intelligently sourcing from available assets
@@ -456,11 +426,6 @@ contract GenesisStrategy is
     _setOperator(newOperator);
   }
 
-  /// @notice Sets the limit percent given vault's total asset against utilize/deutilize amounts.
-  function setMaxUtilizePct(uint256 value) external onlyOwner {
-    _setMaxUtilizePct(value);
-  }
-
   /// @notice Sets target allocation percentages for Morpho and BaseVol
   function setTargetAllocations(uint256 _morphoPct, uint256 _baseVolPct) external onlyOwner {
     require(_morphoPct + _baseVolPct == FLOAT_PRECISION, "Invalid percentages");
@@ -496,11 +461,13 @@ contract GenesisStrategy is
   }
 
   /// @notice Get current PnL information for the entire strategy (BaseVol + Morpho)
+  /// @dev Calculates both realized and unrealized profit/loss
+  /// @dev PnL = (current real-time balance) - (initial capital)
   /// @return isProfit Whether the strategy is in profit
   /// @return absolutePnL Absolute PnL amount (positive for profit, negative for loss)
-  /// @return percentagePnL PnL as percentage of total strategy balance
-  /// @return currentBalance Current total strategy balance (BaseVol + Morpho)
-  /// @return initialStrategyBalance Initial total strategy balance
+  /// @return percentagePnL PnL as percentage of initial capital (0 if initial capital is 0)
+  /// @return currentBalance Current total balance (real-time)
+  /// @return initialStrategyBalance Initial capital (updated on withdrawals)
   function getPnLInfo()
     external
     view
@@ -514,20 +481,30 @@ contract GenesisStrategy is
   {
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
     currentBalance = getTotalUtilizedAssets();
-    initialStrategyBalance = $.strategyBalance + getMorphoAssets(); // Total initial balance
+    initialStrategyBalance = $.strategyBalance;
 
     if (currentBalance > initialStrategyBalance) {
       isProfit = true;
       absolutePnL = int256(currentBalance - initialStrategyBalance);
-      percentagePnL =
-        ((currentBalance - initialStrategyBalance) * FLOAT_PRECISION) /
-        initialStrategyBalance;
+      // Prevent division by zero
+      if (initialStrategyBalance > 0) {
+        percentagePnL =
+          ((currentBalance - initialStrategyBalance) * FLOAT_PRECISION) /
+          initialStrategyBalance;
+      } else {
+        percentagePnL = 0;
+      }
     } else if (currentBalance < initialStrategyBalance) {
       isProfit = false;
       absolutePnL = -int256(initialStrategyBalance - currentBalance);
-      percentagePnL =
-        ((initialStrategyBalance - currentBalance) * FLOAT_PRECISION) /
-        initialStrategyBalance;
+      // Prevent division by zero
+      if (initialStrategyBalance > 0) {
+        percentagePnL =
+          ((initialStrategyBalance - currentBalance) * FLOAT_PRECISION) /
+          initialStrategyBalance;
+      } else {
+        percentagePnL = 0;
+      }
     } else {
       isProfit = false;
       absolutePnL = 0;
@@ -539,7 +516,7 @@ contract GenesisStrategy is
   /// @return profitAmount Current profit amount
   function getCurrentProfit() external view returns (uint256 profitAmount) {
     uint256 currentBalance = getTotalUtilizedAssets();
-    uint256 initialBalance = strategyBalance() + getMorphoAssets();
+    uint256 initialBalance = strategyBalance(); // Now accurately tracks total strategy balance
 
     if (currentBalance > initialBalance) {
       profitAmount = currentBalance - initialBalance;
@@ -552,7 +529,7 @@ contract GenesisStrategy is
   /// @return lossAmount Current loss amount
   function getCurrentLoss() external view returns (uint256 lossAmount) {
     uint256 currentBalance = getTotalUtilizedAssets();
-    uint256 initialBalance = strategyBalance() + getMorphoAssets();
+    uint256 initialBalance = strategyBalance(); // Now accurately tracks total strategy balance
 
     if (currentBalance < initialBalance) {
       lossAmount = initialBalance - currentBalance;
@@ -562,7 +539,7 @@ contract GenesisStrategy is
   }
 
   /// @notice Get strategy performance metrics for entire strategy
-  /// @return totalUtilized Total assets utilized across all managers
+  /// @return totalUtilized Total strategy balance (same as initialBalance for compatibility)
   /// @return currentUtilized Current utilized assets (BaseVol + Morpho)
   /// @return totalProfit Total profit realized
   /// @return totalLoss Total loss realized
@@ -580,11 +557,11 @@ contract GenesisStrategy is
   {
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
-    totalUtilized = $.utilizedAssets;
+    uint256 initialBalance = $.strategyBalance; // Total strategy balance
+    totalUtilized = initialBalance; // For backward compatibility
     currentUtilized = getTotalUtilizedAssets();
 
     // Calculate realized profit/loss from total strategy balance changes
-    uint256 initialBalance = $.strategyBalance + getMorphoAssets();
     if (currentUtilized > initialBalance) {
       totalProfit = currentUtilized - initialBalance;
       totalLoss = 0;
@@ -603,6 +580,67 @@ contract GenesisStrategy is
     _setStrategyStatus(newStatus);
   }
 
+  /// @notice Initialize morphoInitialBalance after contract upgrade
+  /// @dev One-time function to set morphoInitialBalance to current Morpho assets
+  /// @dev Should be called immediately after upgrade if Morpho has existing assets
+  function initializeMorphoBalance() external onlyOwner {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    require($.morphoInitialBalance == 0, "Morpho already initialized");
+
+    uint256 currentMorphoAssets = getMorphoAssets();
+    if (currentMorphoAssets > 0) {
+      $.morphoInitialBalance = currentMorphoAssets;
+      emit DebugLog(
+        string(
+          abi.encodePacked("Initialized morphoInitialBalance to ", currentMorphoAssets.toString())
+        )
+      );
+    }
+  }
+
+  /// @notice Initialize baseVolInitialBalance after contract upgrade
+  /// @dev One-time function to set baseVolInitialBalance to current BaseVol assets
+  /// @dev Should be called immediately after upgrade if BaseVol has existing assets
+  function initializeBaseVolBalance() external onlyOwner {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    require($.baseVolInitialBalance == 0, "BaseVol already initialized");
+
+    uint256 currentBaseVolAssets = getBaseVolAssets();
+    if (currentBaseVolAssets > 0) {
+      $.baseVolInitialBalance = currentBaseVolAssets;
+      emit DebugLog(
+        string(
+          abi.encodePacked("Initialized baseVolInitialBalance to ", currentBaseVolAssets.toString())
+        )
+      );
+    }
+  }
+
+  /// @notice Reset strategyBalance to match current real assets
+  /// @dev Emergency function to fix incorrect strategyBalance
+  /// @dev Only callable by owner when strategy is idle
+  /// @dev This will reset PnL tracking to zero
+  function resetStrategyBalance() external onlyOwner whenIdle {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+
+    uint256 currentBaseVol = getBaseVolAssets();
+    uint256 currentMorpho = getMorphoAssets();
+    uint256 totalAssets = currentBaseVol + currentMorpho;
+
+    emit StrategyBalanceReset(
+      $.strategyBalance,
+      totalAssets,
+      $.baseVolInitialBalance,
+      currentBaseVol,
+      $.morphoInitialBalance,
+      currentMorpho
+    );
+
+    $.strategyBalance = totalAssets;
+    $.baseVolInitialBalance = currentBaseVol;
+    $.morphoInitialBalance = currentMorpho;
+  }
+
   /*//////////////////////////////////////////////////////////////
                            PRIVATE FUNCTIONS
     //////////////////////////////////////////////////////////////*/
@@ -613,12 +651,6 @@ contract GenesisStrategy is
       $.operator = newOperator;
       emit OperatorUpdated(_msgSender(), newOperator);
     }
-  }
-
-  function _setMaxUtilizePct(uint256 value) internal {
-    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-    $.maxUtilizePct = value;
-    emit MaxUtilizePctUpdated(_msgSender(), value);
   }
 
   function _validateStrategyStatus(StrategyStatus targetStatus) private view {
@@ -666,19 +698,22 @@ contract GenesisStrategy is
     return GenesisStrategyStorage.layout().strategyStatus;
   }
 
-  function maxUtilizePct() public view returns (uint256) {
-    return GenesisStrategyStorage.layout().maxUtilizePct;
-  }
-
-  function utilizedAssets() public view returns (uint256) {
-    return GenesisStrategyStorage.layout().utilizedAssets;
-  }
-
   /// @notice Get total assets under management including idle assets in strategy
   /// @dev This includes strategy idle assets + BaseVol assets + Morpho assets (real-time)
   /// @return Total assets managed by this strategy
   function totalAssetsUnderManagement() public view returns (uint256) {
     return getStrategyIdleAssets() + getBaseVolAssets() + getMorphoAssets();
+  }
+
+  /**
+   * @notice Returns the breakdown of assets under management by location
+   * @dev Returns three separate values for different asset locations
+   * @return strategyIdleAssets The amount of idle assets held in the strategy contract
+   * @return baseVolAssets The amount of assets deployed in BaseVol
+   * @return morphoAssets The amount of assets deployed in Morpho
+   */
+  function assetsUnderManagement() public view returns (uint256, uint256, uint256) {
+    return (getStrategyIdleAssets(), getBaseVolAssets(), getMorphoAssets());
   }
 
   function strategyBalance() public view returns (uint256) {
@@ -703,7 +738,8 @@ contract GenesisStrategy is
   ) external authCaller(morphoVaultManager()) {
     if (success) {
       GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-      $.utilizedAssets += amount;
+      $.strategyBalance += amount; // Track Morpho deposits in strategyBalance
+      $.morphoInitialBalance += amount; // Track for profit/loss calculation
       emit MorphoUtilize(_msgSender(), amount);
     }
 
@@ -727,7 +763,42 @@ contract GenesisStrategy is
   ) external authCaller(morphoVaultManager()) {
     if (success) {
       GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-      $.utilizedAssets -= assets;
+
+      // Calculate profit/loss before updating state
+      uint256 currentMorphoBalance = getMorphoAssets();
+      uint256 actualMorphoBalance = currentMorphoBalance + assets;
+
+      if (actualMorphoBalance != $.morphoInitialBalance) {
+        if (actualMorphoBalance > $.morphoInitialBalance) {
+          // Profit detected
+          uint256 profit = actualMorphoBalance - $.morphoInitialBalance;
+          $.strategyBalance += profit;
+          emit DebugLog(
+            string(abi.encodePacked("Morpho profit detected (redeem): ", profit.toString()))
+          );
+        } else {
+          // Loss detected
+          uint256 loss = $.morphoInitialBalance - actualMorphoBalance;
+          uint256 lossPercentage = (loss * FLOAT_PRECISION) / $.morphoInitialBalance;
+
+          _updateLossStatistics(loss, lossPercentage);
+
+          if (loss >= $.strategyBalance) {
+            $.strategyBalance = 0;
+          } else {
+            $.strategyBalance -= loss;
+          }
+          emit DebugLog(
+            string(abi.encodePacked("Morpho loss detected (redeem): ", loss.toString()))
+          );
+        }
+        $.morphoInitialBalance = actualMorphoBalance;
+      }
+
+      // Update state after profit/loss calculation
+      $.strategyBalance -= assets;
+      $.morphoInitialBalance -= assets;
+
       emit MorphoDeutilize(_msgSender(), assets);
     }
 
@@ -804,17 +875,33 @@ contract GenesisStrategy is
 
     (uint256 currentMorphoPct, uint256 currentBaseVolPct) = getCurrentAllocation();
 
-    // Calculate absolute differences
-    morphoDiff = currentMorphoPct > $.morphoTargetPct
-      ? currentMorphoPct - $.morphoTargetPct
-      : $.morphoTargetPct - currentMorphoPct;
+    // If Morpho is not configured, only check BaseVol allocation
+    bool morphoConfigured = address($.morphoVaultManager) != address(0);
 
-    baseVolDiff = currentBaseVolPct > $.baseVolTargetPct
-      ? currentBaseVolPct - $.baseVolTargetPct
-      : $.baseVolTargetPct - currentBaseVolPct;
+    if (morphoConfigured) {
+      // Calculate absolute differences for both allocations
+      morphoDiff = currentMorphoPct > $.morphoTargetPct
+        ? currentMorphoPct - $.morphoTargetPct
+        : $.morphoTargetPct - currentMorphoPct;
 
-    // Check if any difference exceeds threshold
-    needed = morphoDiff > $.rebalanceThreshold || baseVolDiff > $.rebalanceThreshold;
+      baseVolDiff = currentBaseVolPct > $.baseVolTargetPct
+        ? currentBaseVolPct - $.baseVolTargetPct
+        : $.baseVolTargetPct - currentBaseVolPct;
+
+      // Check if any difference exceeds threshold
+      needed = morphoDiff > $.rebalanceThreshold || baseVolDiff > $.rebalanceThreshold;
+    } else {
+      // Morpho not configured: only check BaseVol allocation
+      // Target is 10% BaseVol, 90% idle
+      morphoDiff = 0; // Not applicable
+
+      baseVolDiff = currentBaseVolPct > $.baseVolTargetPct
+        ? currentBaseVolPct - $.baseVolTargetPct
+        : $.baseVolTargetPct - currentBaseVolPct;
+
+      // Only check BaseVol difference
+      needed = baseVolDiff > $.rebalanceThreshold;
+    }
   }
 
   function morphoVaultManager() public view returns (address) {
@@ -825,137 +912,222 @@ contract GenesisStrategy is
                           REBALANCING LOGIC
     //////////////////////////////////////////////////////////////*/
 
-  /// @notice Performs automatic rebalancing between Morpho and BaseVol
-  /// @dev Internal function called by keeperRebalance
-  function _performRebalancing() internal {
+  /// @notice Execute rebalancing between BaseVol and Morpho/idle with idle assets
+  /// @dev Handles three cases: increase BaseVol, increase Morpho, or already balanced
+  /// @dev If Morpho is not configured, keeps 90% as idle and 10% in BaseVol
+  /// @dev Assumes all vault assets have already been transferred to strategy
+  /// @param currentBaseVol Current assets in BaseVol
+  /// @param currentMorpho Current assets in Morpho
+  /// @param targetBaseVol Target assets for BaseVol
+  /// @param targetMorpho Target assets for Morpho (or idle if Morpho not configured)
+  /// @param idleAssets Available idle assets in strategy
+  /// @param morphoConfigured Whether Morpho is configured
+  function _executeRebalancing(
+    uint256 currentBaseVol,
+    uint256 currentMorpho,
+    uint256 targetBaseVol,
+    uint256 targetMorpho,
+    uint256 idleAssets,
+    bool morphoConfigured
+  ) internal {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
     _setStrategyStatus(StrategyStatus.REBALANCING);
 
-    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-
-    uint256 totalAssets = getTotalUtilizedAssets();
-    if (totalAssets == 0) {
-      _setStrategyStatus(StrategyStatus.IDLE);
+    // If Morpho is not configured, rebalance to keep 90% idle and 10% BaseVol
+    if (!morphoConfigured) {
+      _executeRebalancingWithoutMorpho(currentBaseVol, targetBaseVol, idleAssets);
       return;
     }
 
-    uint256 targetMorpho = totalAssets.mulDiv($.morphoTargetPct, FLOAT_PRECISION);
-    uint256 targetBaseVol = totalAssets.mulDiv($.baseVolTargetPct, FLOAT_PRECISION);
+    // Case 1: Need to increase BaseVol
+    if (currentBaseVol < targetBaseVol) {
+      uint256 needed = targetBaseVol - currentBaseVol;
 
-    uint256 currentMorpho = getMorphoAssets();
-    uint256 currentBaseVol = getBaseVolAssets();
-
-    emit DebugLog(
-      string(
-        abi.encodePacked(
-          "Rebalancing: Current M:",
-          currentMorpho.toString(),
-          " B:",
-          currentBaseVol.toString(),
-          " Target M:",
-          targetMorpho.toString(),
-          " B:",
-          targetBaseVol.toString()
+      emit DebugLog(
+        string(
+          abi.encodePacked(
+            "Case 1: Increase BaseVol by ",
+            needed.toString(),
+            " (idle=",
+            idleAssets.toString(),
+            ")"
+          )
         )
-      )
+      );
+
+      // Use idle assets first
+      if (idleAssets >= needed) {
+        // Sufficient idle assets to reach target BaseVol
+        // Transfer from strategy to baseVolManager
+        IERC20(asset()).safeTransfer(address($.baseVolManager), needed);
+        $.baseVolManager.depositToClearingHouse(needed);
+
+        // Deposit remaining idle to Morpho
+        uint256 remainingIdle = idleAssets - needed;
+        if (remainingIdle > 0) {
+          IERC20(asset()).safeTransfer(address($.morphoVaultManager), remainingIdle);
+          $.morphoVaultManager.depositToMorpho(remainingIdle);
+        }
+        return;
+      }
+
+      // Need to withdraw from Morpho
+      uint256 fromMorpho = needed - idleAssets;
+      if (currentMorpho >= fromMorpho) {
+        // Deposit idle assets to BaseVol first
+        if (idleAssets > 0) {
+          IERC20(asset()).safeTransfer(address($.baseVolManager), idleAssets);
+          $.baseVolManager.depositToClearingHouse(idleAssets);
+        }
+
+        // Withdraw from Morpho and deposit to BaseVol (handled by callback)
+        $.morphoVaultManager.withdrawFromMorpho(fromMorpho);
+        return;
+      }
+
+      // Not enough assets to reach target - use all available
+      emit DebugLog("Insufficient assets to reach target BaseVol");
+      if (idleAssets > 0) {
+        IERC20(asset()).safeTransfer(address($.baseVolManager), idleAssets);
+        $.baseVolManager.depositToClearingHouse(idleAssets);
+      }
+      if (currentMorpho > 0) {
+        $.morphoVaultManager.withdrawFromMorpho(currentMorpho);
+      }
+      return;
+    }
+
+    // Case 2: Need to increase Morpho (or decrease BaseVol)
+    if (currentBaseVol > targetBaseVol) {
+      uint256 excess = currentBaseVol - targetBaseVol;
+
+      emit DebugLog(
+        string(
+          abi.encodePacked(
+            "Case 2: Decrease BaseVol by ",
+            excess.toString(),
+            " (idle=",
+            idleAssets.toString(),
+            ")"
+          )
+        )
+      );
+
+      // Withdraw excess from BaseVol (will be deposited to Morpho via callback)
+      $.baseVolManager.withdrawFromClearingHouse(excess);
+
+      // Also deposit any idle assets to Morpho
+      if (idleAssets > 0) {
+        IERC20(asset()).safeTransfer(address($.morphoVaultManager), idleAssets);
+        $.morphoVaultManager.depositToMorpho(idleAssets);
+      }
+      return;
+    }
+
+    // Case 3: Already balanced, just utilize idle assets according to target ratio
+    emit DebugLog(
+      string(abi.encodePacked("Case 3: Already balanced, utilizing idle=", idleAssets.toString()))
     );
 
-    // Determine rebalancing direction
-    if (currentMorpho < targetMorpho) {
-      // Need to move assets from BaseVol to Morpho
-      uint256 moveToMorpho = targetMorpho - currentMorpho;
-      if (currentBaseVol >= moveToMorpho) {
-        _moveFromBaseVolToMorpho(moveToMorpho);
-      } else {
-        // Move all available from BaseVol
-        if (currentBaseVol > 0) {
-          _moveFromBaseVolToMorpho(currentBaseVol);
-        }
+    if (idleAssets > 0) {
+      // Distribute idle assets according to target percentages
+      uint256 toBaseVol = idleAssets.mulDiv($.baseVolTargetPct, FLOAT_PRECISION);
+      uint256 toMorpho = idleAssets - toBaseVol;
+
+      // Deposit to BaseVol
+      if (toBaseVol > 0) {
+        IERC20(asset()).safeTransfer(address($.baseVolManager), toBaseVol);
+        $.baseVolManager.depositToClearingHouse(toBaseVol);
       }
-    } else if (currentMorpho > targetMorpho) {
-      // Need to move assets from Morpho to BaseVol
-      uint256 moveFromMorpho = currentMorpho - targetMorpho;
-      _moveFromMorphoToBaseVol(moveFromMorpho);
+
+      // Deposit to Morpho
+      if (toMorpho > 0) {
+        IERC20(asset()).safeTransfer(address($.morphoVaultManager), toMorpho);
+        $.morphoVaultManager.depositToMorpho(toMorpho);
+      }
+    } else {
+      // No idle assets and already balanced
+      _setStrategyStatus(StrategyStatus.IDLE);
     }
 
     emit RebalancingCompleted(currentMorpho, currentBaseVol, targetMorpho, targetBaseVol);
   }
 
-  /// @notice Moves assets from BaseVol to Morpho
-  /// @param amount Amount to move
-  function _moveFromBaseVolToMorpho(uint256 amount) internal {
+  /// @notice Execute rebalancing when Morpho is not configured (10% BaseVol, 90% idle)
+  /// @dev Withdraws excess from BaseVol or deposits to BaseVol to reach target
+  /// @dev Assumes all vault assets have already been transferred to strategy
+  /// @param currentBaseVol Current assets in BaseVol
+  /// @param targetBaseVol Target assets for BaseVol (10% of total)
+  /// @param idleAssets Available idle assets in strategy
+  function _executeRebalancingWithoutMorpho(
+    uint256 currentBaseVol,
+    uint256 targetBaseVol,
+    uint256 idleAssets
+  ) internal {
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
-    // Step 1: Withdraw from BaseVol
-    if (address($.baseVolManager) != address(0)) {
-      $.baseVolManager.withdrawFromClearingHouse(amount);
-      // Note: Assets will be transferred to this strategy contract via callback
-    }
+    emit DebugLog(
+      string(
+        abi.encodePacked(
+          "Rebalancing without Morpho: CurrentBV=",
+          currentBaseVol.toString(),
+          " TargetBV=",
+          targetBaseVol.toString(),
+          " Idle=",
+          idleAssets.toString()
+        )
+      )
+    );
 
-    // Step 2: Deposit to Morpho (will be handled in the withdraw callback)
-    // The withdraw callback will detect rebalancing status and deposit to Morpho
-  }
+    // Case 1: Need to increase BaseVol (currently < 10%)
+    if (currentBaseVol < targetBaseVol) {
+      uint256 needed = targetBaseVol - currentBaseVol;
 
-  /// @notice Moves assets from Morpho to BaseVol
-  /// @param amount Amount to move
-  function _moveFromMorphoToBaseVol(uint256 amount) internal {
-    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-
-    // Step 1: Withdraw from Morpho
-    if (address($.morphoVaultManager) != address(0)) {
-      $.morphoVaultManager.withdrawFromMorpho(amount);
-      // Note: Assets will be transferred to this strategy contract via callback
-    }
-
-    // Step 2: Deposit to BaseVol (will be handled in the withdraw callback)
-    // The withdraw callback will detect rebalancing status and deposit to BaseVol
-  }
-
-  /// @notice Utilizes new funds according to target allocation
-  /// @param amount Total amount to utilize
-  function _utilizeNewFunds(uint256 amount) internal {
-    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-
-    // Distribute according to target percentages
-    uint256 toMorpho = amount.mulDiv($.morphoTargetPct, FLOAT_PRECISION);
-    uint256 toBaseVol = amount - toMorpho; // Remainder goes to BaseVol
-
-    // Deposit to Morpho first (if manager exists)
-    if (toMorpho > 0 && address($.morphoVaultManager) != address(0)) {
-      IERC20(asset()).safeTransferFrom(address(vault()), address($.morphoVaultManager), toMorpho);
-      $.morphoVaultManager.depositToMorpho(toMorpho);
-    }
-    // Note: If Morpho manager is not set, toMorpho amount stays idle in vault
-
-    // Deposit to BaseVol
-    if (toBaseVol > 0) {
-      _utilize(toBaseVol);
-    }
-  }
-
-  /// @notice Deutilizes assets for withdrawal requests intelligently
-  /// @param amountNeeded Amount needed for withdrawals
-  function _deutilizeForWithdrawals(uint256 amountNeeded) internal {
-    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
-
-    uint256 remaining = amountNeeded;
-
-    // First, try to withdraw from BaseVol (more liquid)
-    uint256 baseVolAvailable = getWithdrawableBaseVolAssets();
-    if (remaining > 0 && baseVolAvailable > 0) {
-      uint256 fromBaseVol = Math.min(remaining, baseVolAvailable);
-      $.baseVolManager.withdrawFromClearingHouse(fromBaseVol);
-      remaining -= fromBaseVol;
-    }
-
-    // If still need more, withdraw from Morpho
-    if (remaining > 0 && address($.morphoVaultManager) != address(0)) {
-      uint256 morphoAvailable = getMorphoAssets();
-      if (morphoAvailable > 0) {
-        uint256 fromMorpho = Math.min(remaining, morphoAvailable);
-        $.morphoVaultManager.withdrawFromMorpho(fromMorpho);
-        remaining -= fromMorpho;
+      if (idleAssets >= needed) {
+        // Sufficient idle assets to reach target
+        // Transfer from strategy to baseVolManager
+        IERC20(asset()).safeTransfer(address($.baseVolManager), needed);
+        $.baseVolManager.depositToClearingHouse(needed);
+        emit DebugLog(
+          string(abi.encodePacked("Deposited ", needed.toString(), " to BaseVol from idle assets"))
+        );
+      } else {
+        // Not enough idle assets, deposit all available
+        if (idleAssets > 0) {
+          IERC20(asset()).safeTransfer(address($.baseVolManager), idleAssets);
+          $.baseVolManager.depositToClearingHouse(idleAssets);
+          emit DebugLog(
+            string(
+              abi.encodePacked(
+                "Deposited all idle assets (",
+                idleAssets.toString(),
+                ") to BaseVol, still need ",
+                (needed - idleAssets).toString()
+              )
+            )
+          );
+        }
       }
+      _setStrategyStatus(StrategyStatus.IDLE);
+      return;
     }
+
+    // Case 2: Need to decrease BaseVol (currently > 10%)
+    if (currentBaseVol > targetBaseVol) {
+      uint256 excess = currentBaseVol - targetBaseVol;
+
+      // Withdraw excess from BaseVol to idle (will stay in strategy)
+      $.baseVolManager.withdrawFromClearingHouse(excess);
+      emit DebugLog(
+        string(abi.encodePacked("Withdrawing ", excess.toString(), " from BaseVol to keep as idle"))
+      );
+      // Callback will handle setting status back to IDLE
+      return;
+    }
+
+    // Case 3: Already at target (10% BaseVol, 90% idle)
+    emit DebugLog("Already balanced at 10% BaseVol, 90% idle");
+    _setStrategyStatus(StrategyStatus.IDLE);
   }
 
   /// @notice Enhanced withdraw callback that handles rebalancing and profit/loss tracking
@@ -970,42 +1142,105 @@ contract GenesisStrategy is
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
     if (success) {
-      // Check the actual ClearingHouse balance for profit/loss calculation
-      uint256 actualClearingHouseBalance = $.baseVolManager.totalClearingHouseBalance() + amount;
+      // Calculate profit/loss before updating state (similar to Morpho logic)
+      uint256 currentBaseVolBalance = getBaseVolAssets();
+      uint256 actualBaseVolBalance = currentBaseVolBalance + amount;
 
-      // Update utilizedAssets considering profit or loss
-      if (actualClearingHouseBalance != $.strategyBalance) {
-        if (actualClearingHouseBalance > $.strategyBalance) {
-          // Profit
-          uint256 profit = actualClearingHouseBalance - $.strategyBalance;
-          $.utilizedAssets += profit;
+      if (actualBaseVolBalance != $.baseVolInitialBalance) {
+        if (actualBaseVolBalance > $.baseVolInitialBalance) {
+          // Profit detected
+          uint256 profit = actualBaseVolBalance - $.baseVolInitialBalance;
+          $.strategyBalance += profit;
+          emit DebugLog(string(abi.encodePacked("BaseVol profit detected: ", profit.toString())));
         } else {
-          // Loss
-          uint256 loss = $.strategyBalance - actualClearingHouseBalance;
-          uint256 lossPercentage = (loss * FLOAT_PRECISION) / $.strategyBalance;
+          // Loss detected
+          uint256 loss = $.baseVolInitialBalance - actualBaseVolBalance;
+          uint256 lossPercentage = (loss * FLOAT_PRECISION) / $.baseVolInitialBalance;
 
           _updateLossStatistics(loss, lossPercentage);
 
-          if (loss >= $.utilizedAssets) {
-            $.utilizedAssets = 0;
+          if (loss >= $.strategyBalance) {
+            $.strategyBalance = 0;
           } else {
-            $.utilizedAssets -= loss;
+            $.strategyBalance -= loss;
           }
+          emit DebugLog(string(abi.encodePacked("BaseVol loss detected: ", loss.toString())));
         }
-        $.strategyBalance = actualClearingHouseBalance;
+        $.baseVolInitialBalance = actualBaseVolBalance;
       }
 
-      // Update state
-      $.utilizedAssets -= amount;
+      // Update state after profit/loss calculation
       $.strategyBalance -= amount;
+      $.baseVolInitialBalance -= amount;
+
+      // Check if this is a settlement withdrawal
+      if ($.isSettlementWithdrawal) {
+        // Transfer to vault as idle assets
+        IERC20(asset()).safeTransfer(address(vault()), amount);
+
+        // Clear flag and reset status
+        $.isSettlementWithdrawal = false;
+        _setStrategyStatus(StrategyStatus.IDLE);
+
+        emit DebugLog(
+          string(abi.encodePacked("Settlement withdrawal completed: ", amount.toString()))
+        );
+
+        emit BaseVolDeutilize(_msgSender(), amount);
+        return;
+      }
+
+      // Check if we're in deutilizing mode (stop() was called)
+      if (strategyStatus() == StrategyStatus.DEUTILIZING) {
+        // Transfer all assets to vault
+        IERC20(asset()).safeTransfer(address(vault()), amount);
+
+        emit DebugLog(
+          string(
+            abi.encodePacked(
+              "Deutilizing: Transferred ",
+              amount.toString(),
+              " from BaseVol to vault"
+            )
+          )
+        );
+
+        // Check if all withdrawals are complete (no more assets in BaseVol or Morpho)
+        bool allWithdrawn = getBaseVolAssets() == 0 && getMorphoAssets() == 0;
+        if (allWithdrawn) {
+          _setStrategyStatus(StrategyStatus.IDLE);
+          emit DebugLog("Deutilizing complete: All assets transferred to vault");
+        }
+
+        emit BaseVolDeutilize(_msgSender(), amount);
+        return;
+      }
 
       // Check if we're in rebalancing mode
       if (strategyStatus() == StrategyStatus.REBALANCING) {
-        // During rebalancing, move assets to Morpho
+        // During rebalancing, move assets to Morpho if configured
         if (address($.morphoVaultManager) != address(0)) {
           IERC20(asset()).safeTransfer(address($.morphoVaultManager), amount);
           $.morphoVaultManager.depositToMorpho(amount);
+          emit DebugLog(
+            string(
+              abi.encodePacked("Rebalancing: Moved ", amount.toString(), " from BaseVol to Morpho")
+            )
+          );
           return; // Don't transfer to vault during rebalancing
+        } else {
+          // Morpho not configured, keep as idle in strategy (no transfer needed, already in strategy)
+          _setStrategyStatus(StrategyStatus.IDLE);
+          emit DebugLog(
+            string(
+              abi.encodePacked(
+                "Rebalancing: Kept ",
+                amount.toString(),
+                " from BaseVol as idle in strategy - Morpho not configured"
+              )
+            )
+          );
+          return;
         }
       }
 
@@ -1063,9 +1298,7 @@ contract GenesisStrategy is
     }
 
     // Reset status
-    if (success && strategyStatus() == StrategyStatus.EMERGENCY) {
-      _setStrategyStatus(StrategyStatus.EMERGENCY);
-    } else if (strategyStatus() != StrategyStatus.REBALANCING) {
+    if (strategyStatus() != StrategyStatus.REBALANCING) {
       _setStrategyStatus(StrategyStatus.IDLE);
     }
   }
@@ -1078,13 +1311,73 @@ contract GenesisStrategy is
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
     if (success) {
-      $.utilizedAssets -= amount;
+      // Calculate profit/loss before updating state (similar to BaseVol logic)
+      uint256 currentMorphoBalance = getMorphoAssets();
+      uint256 actualMorphoBalance = currentMorphoBalance + amount;
+
+      if (actualMorphoBalance != $.morphoInitialBalance) {
+        if (actualMorphoBalance > $.morphoInitialBalance) {
+          // Profit detected
+          uint256 profit = actualMorphoBalance - $.morphoInitialBalance;
+          $.strategyBalance += profit;
+          emit DebugLog(string(abi.encodePacked("Morpho profit detected: ", profit.toString())));
+        } else {
+          // Loss detected
+          uint256 loss = $.morphoInitialBalance - actualMorphoBalance;
+          uint256 lossPercentage = (loss * FLOAT_PRECISION) / $.morphoInitialBalance;
+
+          _updateLossStatistics(loss, lossPercentage);
+
+          if (loss >= $.strategyBalance) {
+            $.strategyBalance = 0;
+          } else {
+            $.strategyBalance -= loss;
+          }
+          emit DebugLog(string(abi.encodePacked("Morpho loss detected: ", loss.toString())));
+        }
+        $.morphoInitialBalance = actualMorphoBalance;
+      }
+
+      // Update state after profit/loss calculation
+      $.strategyBalance -= amount;
+      $.morphoInitialBalance -= amount;
+
+      // Check if we're in deutilizing mode (stop() was called)
+      if (strategyStatus() == StrategyStatus.DEUTILIZING) {
+        // Transfer all assets to vault
+        IERC20(asset()).safeTransfer(address(vault()), amount);
+
+        emit DebugLog(
+          string(
+            abi.encodePacked(
+              "Deutilizing: Transferred ",
+              amount.toString(),
+              " from Morpho to vault"
+            )
+          )
+        );
+
+        // Check if all withdrawals are complete (no more assets in BaseVol or Morpho)
+        bool allWithdrawn = getBaseVolAssets() == 0 && getMorphoAssets() == 0;
+        if (allWithdrawn) {
+          _setStrategyStatus(StrategyStatus.IDLE);
+          emit DebugLog("Deutilizing complete: All assets transferred to vault");
+        }
+
+        emit MorphoDeutilize(_msgSender(), amount);
+        return;
+      }
 
       // Check if we're in rebalancing mode
       if (strategyStatus() == StrategyStatus.REBALANCING) {
         // During rebalancing, move assets to BaseVol
-        IERC20(asset()).safeTransferFrom(address(this), address($.baseVolManager), amount);
+        IERC20(asset()).safeTransfer(address($.baseVolManager), amount);
         $.baseVolManager.depositToClearingHouse(amount);
+        emit DebugLog(
+          string(
+            abi.encodePacked("Rebalancing: Moved ", amount.toString(), " from Morpho to BaseVol")
+          )
+        );
         return; // Don't emit normal events during rebalancing
       }
 

@@ -91,17 +91,10 @@ const main = async () => {
 
     // Check configuration
     console.log("\n🔧 Contract Configuration:");
-    const maxUtilizePct = await strategyContract.maxUtilizePct();
-    console.log("- Max Utilize Percentage:", ethers.formatUnits(maxUtilizePct, 18), "%");
-
     // Print additional information
     console.log("\n📊 Contract State:");
     console.log("- Strategy Status:", await strategyContract.strategyStatus());
     console.log("- Paused:", await strategyContract.paused());
-    console.log(
-      "- Utilized Assets:",
-      ethers.formatUnits(await strategyContract.utilizedAssets(), 6),
-    );
     console.log(
       "- Strategy Balance:",
       ethers.formatUnits(await strategyContract.strategyBalance(), 6),

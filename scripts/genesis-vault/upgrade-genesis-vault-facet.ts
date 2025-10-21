@@ -13,7 +13,7 @@ type SupportedNetwork = (typeof NETWORK)[number];
 
 // Genesis Vault Diamond addresses by network
 const GENESIS_VAULT_ADDRESSES = {
-  base_sepolia: "0xb01777d4e6d9b01b6541a500e17be149f220e4de", // Update after deployment
+  base_sepolia: "0x640F0323257274883823b12b6C52e0aD809c3C59", // Update after deployment
   base: "", // Update after deployment
 };
 

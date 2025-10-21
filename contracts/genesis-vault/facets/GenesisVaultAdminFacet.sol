@@ -206,8 +206,8 @@ contract GenesisVaultAdminFacet {
     // Require all shares redeemed and no utilized assets
     if (s.totalSupply != 0) revert TotalSupplyNotZero();
     if (s.strategy != address(0)) {
-      if (IGenesisStrategy(s.strategy).utilizedAssets() != 0) {
-        revert("Strategy has utilized assets");
+      if (IGenesisStrategy(s.strategy).totalAssetsUnderManagement() != 0) {
+        revert("Strategy has assets under management");
       }
     }
 
