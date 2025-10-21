@@ -191,6 +191,29 @@ library LibBaseVolStrike {
       : order.underPrice * order.unit * PRICE_UNIT;
     uint256 fee = (loserAmount * bvs.commissionfee) / BASE;
 
+    _processWinSettlement(winner, loser, order, winnerAmount, loserAmount, fee, winPosition, bvs);
+
+    bvs.settlementResults[order.idx] = SettlementResult({
+      idx: order.idx,
+      winPosition: winPosition,
+      winAmount: loserAmount,
+      feeRate: bvs.commissionfee,
+      fee: fee
+    });
+
+    return fee;
+  }
+
+  function _processWinSettlement(
+    address winner,
+    address loser,
+    FilledOrder storage order,
+    uint256 winnerAmount,
+    uint256 loserAmount,
+    uint256 fee,
+    WinPosition winPosition,
+    DiamondStorage storage bvs
+  ) private {
     // Calculate redeem ratio
     uint256 winnerRedeemed = (winPosition == WinPosition.Over)
       ? order.overRedeemed
@@ -247,59 +270,41 @@ library LibBaseVolStrike {
       }
     }
 
-    // Get coupon information for events
+    // Emit events
     uint256 usedCoupon = bvs.clearingHouse.escrowCoupons(
       address(this),
       order.epoch,
       loser,
       order.idx
     );
-
-    // Emit settlement events for loser
+    uint256 loserBalance = bvs.clearingHouse.userBalances(loser);
     _emitSettlement(
       order.idx,
       order.epoch,
       loser,
-      bvs.clearingHouse.userBalances(loser) + loserAmount,
-      bvs.clearingHouse.userBalances(loser),
+      loserBalance + loserAmount,
+      loserBalance,
       usedCoupon
     );
 
-    // Calculate final amounts for events
     uint256 vaultWinnerAmount = redeemRatio > 0 ? (winnerAmount * redeemRatio) / PRICE_UNIT : 0;
-    uint256 winnerTotalReceived = userWinAmount + (winnerAmount - vaultWinnerAmount);
+    uint256 winnerTotalReceived = userWinAmount - userFee + (winnerAmount - vaultWinnerAmount);
+    uint256 winnerBalance = bvs.clearingHouse.userBalances(winner);
+    uint256 winnerPrevBalance = winnerBalance - winnerTotalReceived;
+    _emitSettlement(order.idx, order.epoch, winner, winnerPrevBalance, winnerBalance, 0);
 
-    // Emit settlement event for winner
-    _emitSettlement(
-      order.idx,
-      order.epoch,
-      winner,
-      bvs.clearingHouse.userBalances(winner) - winnerTotalReceived,
-      bvs.clearingHouse.userBalances(winner),
-      0
-    );
-
-    // Emit settlement event for redeemVault if applicable
     if (vaultWinAmount > 0 || vaultWinnerAmount > 0) {
-      uint256 vaultTotalReceived = vaultWinAmount + vaultWinnerAmount;
+      uint256 vaultTotalReceived = vaultWinAmount - vaultFee + vaultWinnerAmount;
+      uint256 vaultBalance = bvs.clearingHouse.userBalances(bvs.redeemVault);
       _emitSettlement(
         order.idx,
         order.epoch,
         bvs.redeemVault,
-        bvs.clearingHouse.userBalances(bvs.redeemVault) - vaultTotalReceived,
-        bvs.clearingHouse.userBalances(bvs.redeemVault),
+        vaultBalance - vaultTotalReceived,
+        vaultBalance,
         0
       );
     }
-
-    bvs.settlementResults[order.idx] = SettlementResult({
-      idx: order.idx,
-      winPosition: winPosition,
-      winAmount: loserAmount,
-      feeRate: bvs.commissionfee,
-      fee: fee
-    });
-    return fee;
   }
 
   function _transferRedeemedAmountsToVault(FilledOrder storage order) private {

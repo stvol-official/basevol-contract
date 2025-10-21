@@ -31,6 +31,7 @@ contract ClearingHouse is
   uint256 private constant DEFAULT_FORCE_WITHDRAWAL_DELAY = 24 hours;
   uint256 private constant START_TIMESTAMP = 1750636800; // for epoch
   uint256 private constant MAX_OPERATOR_CHANGE_AMOUNT = 100 * 1e6; // $100
+  uint256 private constant TREASURY_AUTO_CLAIM_THRESHOLD = 1000 * PRICE_UNIT; // $1000
 
   event Deposit(address indexed to, address from, uint256 amount, uint256 result);
   event Withdraw(address indexed to, uint256 amount, uint256 result);
@@ -227,6 +228,7 @@ contract ClearingHouse is
     $.userBalances[user] -= amount + $.withdrawalFee;
     $.treasuryAmount += $.withdrawalFee;
     $.token.safeTransfer(user, amount);
+    _autoClaimTreasuryIfNeeded();
     emit Withdraw(user, amount, $.userBalances[user]);
   }
 
@@ -261,6 +263,7 @@ contract ClearingHouse is
     $.userBalances[request.user] -= request.amount + $.withdrawalFee;
     $.treasuryAmount += $.withdrawalFee;
     $.token.safeTransfer(request.user, request.amount);
+    _autoClaimTreasuryIfNeeded();
     emit WithdrawalApproved(request.user, request.amount);
   }
 
@@ -335,6 +338,7 @@ contract ClearingHouse is
     $.userBalances[msg.sender] = 0;
     $.treasuryAmount += $.withdrawalFee;
     $.token.safeTransfer(msg.sender, request.amount);
+    _autoClaimTreasuryIfNeeded();
 
     emit ForceWithdrawalExecuted(msg.sender, request.amount);
   }
@@ -399,6 +403,8 @@ contract ClearingHouse is
       );
       emit Withdraw(request.user, request.amount, $.userBalances[request.user]);
     }
+
+    _autoClaimTreasuryIfNeeded();
   }
 
   function claimTreasury() external nonReentrant onlyAdmin {
@@ -406,6 +412,15 @@ contract ClearingHouse is
     uint256 currentTreasuryAmount = $.treasuryAmount;
     $.treasuryAmount = 0;
     $.token.safeTransfer($.operatorVaultAddress, currentTreasuryAmount);
+  }
+
+  function _autoClaimTreasuryIfNeeded() internal {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    if ($.treasuryAmount >= TREASURY_AUTO_CLAIM_THRESHOLD) {
+      uint256 currentTreasuryAmount = $.treasuryAmount;
+      $.treasuryAmount = 0;
+      $.token.safeTransfer($.operatorVaultAddress, currentTreasuryAmount);
+    }
   }
 
   function userBalances(address user) external view returns (uint256) {
