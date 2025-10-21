@@ -285,7 +285,7 @@ contract GenesisStrategy is
   /// @notice Withdraws all BaseVol assets to idle for round settlement accounting
   /// @dev Only callable by vault during settlement for clean per-round accounting
   /// @dev Only withdraws withdrawable assets (excludes escrowed funds)
-  function withdrawAllBaseVolForSettlement() external authCaller(vault()) whenIdle nonReentrant {
+  function withdrawAllBaseVolForSettlement() external authCaller(vault()) nonReentrant {
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
     // Get withdrawable BaseVol assets (excludes escrowed funds)
