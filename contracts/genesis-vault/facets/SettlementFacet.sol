@@ -15,6 +15,8 @@ import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 contract SettlementFacet {
   using Math for uint256;
 
+  uint256 internal constant FLOAT_PRECISION = 1e18;
+
   // ============ Events ============
   event RoundSettled(uint256 indexed epoch, uint256 sharePrice);
   event RoundSettlementProcessed(
@@ -499,7 +501,14 @@ contract SettlementFacet {
     uint256 totalProfit = (profitPerShare * withdrawShares) / (10 ** s.decimals);
 
     // Calculate fee amount
-    feeAmount = (totalProfit * s.performanceFee) / (10 ** s.decimals);
+    // FIX: Use 1e18 instead of (10 ** s.decimals) to match VaultCoreFacet.sol:779
+    // performanceFee is stored in 18 decimals (e.g., 0.2 * 1e18 = 20%)
+    feeAmount = (totalProfit * s.performanceFee) / FLOAT_PRECISION;
+
+    // Safety check: fee should not exceed total profit
+    if (feeAmount > totalProfit) {
+      feeAmount = totalProfit;
+    }
 
     if (feeAmount > 0) {
       // Transfer performance fee to fee recipient
