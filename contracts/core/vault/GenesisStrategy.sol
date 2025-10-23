@@ -282,32 +282,60 @@ contract GenesisStrategy is
     }
   }
 
-  /// @notice Withdraws all BaseVol assets to idle for round settlement accounting
+  /// @notice Withdraws all strategy assets (BaseVol, Morpho, and idle) to vault for round settlement accounting
   /// @dev Only callable by vault during settlement for clean per-round accounting
-  /// @dev Only withdraws withdrawable assets (excludes escrowed funds)
-  function withdrawAllBaseVolForSettlement() external authCaller(vault()) nonReentrant {
+  /// @dev Withdraws all assets from BaseVol, Morpho, and transfers idle assets to vault
+  function withdrawAllStrategyAssetsForSettlement() external authCaller(vault()) nonReentrant {
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
-    // Get withdrawable BaseVol assets (excludes escrowed funds)
-    uint256 withdrawableAmount = getWithdrawableBaseVolAssets();
-
-    if (withdrawableAmount == 0) {
-      emit DebugLog("No withdrawable BaseVol assets for settlement");
-      return;
-    }
-
-    emit DebugLog(
-      string(
-        abi.encodePacked("Withdrawing all BaseVol for settlement: ", withdrawableAmount.toString())
-      )
-    );
-
-    // Mark as settlement withdrawal (not for rebalancing or user withdrawals)
+    // Mark as settlement withdrawal
     _setStrategyStatus(StrategyStatus.DEUTILIZING);
     $.isSettlementWithdrawal = true;
 
-    // Withdraw all withdrawable BaseVol assets
-    $.baseVolManager.withdrawFromClearingHouse(withdrawableAmount);
+    bool hasWithdrawals = false;
+
+    // 1. Withdraw all withdrawable BaseVol assets (excludes escrowed funds)
+    uint256 baseVolAmount = getWithdrawableBaseVolAssets();
+    if (baseVolAmount > 0) {
+      $.baseVolManager.withdrawFromClearingHouse(baseVolAmount);
+      hasWithdrawals = true;
+      emit DebugLog(
+        string(abi.encodePacked("Withdrawing BaseVol for settlement: ", baseVolAmount.toString()))
+      );
+    }
+
+    // 2. Withdraw all Morpho assets (if configured)
+    if (address($.morphoVaultManager) != address(0)) {
+      uint256 morphoAmount = getMorphoAssets();
+      if (morphoAmount > 0) {
+        $.morphoVaultManager.withdrawFromMorpho(morphoAmount);
+        hasWithdrawals = true;
+        emit DebugLog(
+          string(abi.encodePacked("Withdrawing Morpho for settlement: ", morphoAmount.toString()))
+        );
+      }
+    }
+
+    // 3. Transfer idle assets to vault immediately
+    uint256 idleAmount = getStrategyIdleAssets();
+    if (idleAmount > 0) {
+      IERC20(asset()).safeTransfer(address($.vault), idleAmount);
+      emit DebugLog(
+        string(
+          abi.encodePacked(
+            "Transferring idle assets to vault for settlement: ",
+            idleAmount.toString()
+          )
+        )
+      );
+    }
+
+    // If no async withdrawals are pending, reset status
+    if (!hasWithdrawals) {
+      $.isSettlementWithdrawal = false;
+      _setStrategyStatus(StrategyStatus.IDLE);
+      emit DebugLog("No strategy assets to withdraw for settlement");
+    }
   }
 
   /// @notice Provides liquidity for vault withdrawal requests by intelligently sourcing from available assets
@@ -1139,13 +1167,19 @@ contract GenesisStrategy is
         // Transfer to vault as idle assets
         IERC20(asset()).safeTransfer(address(vault()), amount);
 
-        // Clear flag and reset status
-        $.isSettlementWithdrawal = false;
-        _setStrategyStatus(StrategyStatus.IDLE);
-
         emit DebugLog(
-          string(abi.encodePacked("Settlement withdrawal completed: ", amount.toString()))
+          string(
+            abi.encodePacked("Settlement withdrawal from BaseVol completed: ", amount.toString())
+          )
         );
+
+        // Check if all settlement withdrawals are complete (no more assets in BaseVol or Morpho)
+        bool allWithdrawn = getBaseVolAssets() == 0 && getMorphoAssets() == 0;
+        if (allWithdrawn) {
+          $.isSettlementWithdrawal = false;
+          _setStrategyStatus(StrategyStatus.IDLE);
+          emit DebugLog("All settlement withdrawals complete");
+        }
 
         emit BaseVolDeutilize(_msgSender(), amount);
         return;
@@ -1284,6 +1318,29 @@ contract GenesisStrategy is
       // Update state after profit/loss calculation
       $.strategyBalance -= amount;
       $.morphoInitialBalance -= amount;
+
+      // Check if this is a settlement withdrawal
+      if ($.isSettlementWithdrawal) {
+        // Transfer to vault as idle assets
+        IERC20(asset()).safeTransfer(address(vault()), amount);
+
+        emit DebugLog(
+          string(
+            abi.encodePacked("Settlement withdrawal from Morpho completed: ", amount.toString())
+          )
+        );
+
+        // Check if all settlement withdrawals are complete (no more assets in BaseVol or Morpho)
+        bool allWithdrawn = getBaseVolAssets() == 0 && getMorphoAssets() == 0;
+        if (allWithdrawn) {
+          $.isSettlementWithdrawal = false;
+          _setStrategyStatus(StrategyStatus.IDLE);
+          emit DebugLog("All settlement withdrawals complete");
+        }
+
+        emit MorphoDeutilize(_msgSender(), amount);
+        return;
+      }
 
       // Check if we're in deutilizing mode (stop() was called)
       if (strategyStatus() == StrategyStatus.DEUTILIZING) {

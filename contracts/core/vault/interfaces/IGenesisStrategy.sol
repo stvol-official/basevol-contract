@@ -72,11 +72,11 @@ interface IGenesisStrategy {
   function provideLiquidityForWithdrawals(uint256 amountNeeded) external;
 
   /**
-   * @notice Withdraws all BaseVol assets to idle for round settlement accounting
+   * @notice Withdraws all strategy assets (BaseVol, Morpho, and idle) to vault for round settlement accounting
    * @dev Called by vault during round settlement to ensure clean accounting per round
-   * @dev Only withdraws withdrawable assets (excludes escrowed funds)
+   * @dev Withdraws all assets from BaseVol, Morpho, and transfers idle assets to vault
    */
-  function withdrawAllBaseVolForSettlement() external;
+  function withdrawAllStrategyAssetsForSettlement() external;
 
   /**
    * @notice Callback function called when a deposit operation completes

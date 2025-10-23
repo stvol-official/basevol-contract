@@ -22,8 +22,7 @@ contract SettlementFacet {
   event RoundSettlementProcessed(
     uint256 indexed epoch,
     uint256 requiredRedeemAssets,
-    uint256 availableAssets,
-    bool liquidityRequestMade
+    uint256 availableAssets
   );
   event StrategyLiquidityRequested(uint256 amount);
   event StrategyLiquidityRequestFailed(uint256 amount, string reason);
@@ -151,35 +150,22 @@ contract SettlementFacet {
    * @notice Process epoch settlement including liquidity management
    */
   function _processRoundSettlement(uint256 epoch) internal {
-    // 0. Withdraw all BaseVol assets for clean accounting
-    _withdrawBaseVolForSettlement();
+    // 0. Withdraw all strategy assets (BaseVol, Morpho, and idle) for clean accounting
+    _withdrawStrategyAssetsForSettlement();
 
     // 1. Calculate required assets for redemptions in this epoch
     uint256 requiredRedeemAssets = _calculateRoundRedeemAssets(epoch);
 
-    // 2. Check current available assets (now includes withdrawn BaseVol)
+    // 2. Check current available assets (now includes all withdrawn strategy assets)
     uint256 availableAssets = LibGenesisVault.idleAssets();
 
-    // 3. Request liquidity from strategy if insufficient
-    bool liquidityRequestMade = false;
-    if (requiredRedeemAssets > availableAssets) {
-      uint256 shortfall = requiredRedeemAssets - availableAssets;
-      _requestLiquidityFromStrategy(shortfall);
-      liquidityRequestMade = true;
-    }
-
-    // 4. Auto-process all user requests for this epoch
+    // 3. Auto-process all user requests for this epoch
     _autoProcessEpochRequests(epoch);
 
-    // 5. Signal strategy for idle asset utilization (async)
+    // 4. Signal strategy for idle asset utilization (async)
     _notifyStrategyForUtilization();
 
-    emit RoundSettlementProcessed(
-      epoch,
-      requiredRedeemAssets,
-      availableAssets,
-      liquidityRequestMade
-    );
+    emit RoundSettlementProcessed(epoch, requiredRedeemAssets, availableAssets);
   }
 
   /**
@@ -204,9 +190,9 @@ contract SettlementFacet {
   }
 
   /**
-   * @notice Withdraw all BaseVol assets for settlement accounting
+   * @notice Withdraw all strategy assets (BaseVol, Morpho, and idle) for settlement accounting
    */
-  function _withdrawBaseVolForSettlement() internal {
+  function _withdrawStrategyAssetsForSettlement() internal {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     address strategyAddr = s.strategy;
 
@@ -214,84 +200,18 @@ contract SettlementFacet {
       return;
     }
 
-    try IGenesisStrategy(strategyAddr).withdrawAllBaseVolForSettlement() {
-      emit StrategyLiquidityRequested(0); // 0 indicates full BaseVol withdrawal for settlement
+    try IGenesisStrategy(strategyAddr).withdrawAllStrategyAssetsForSettlement() {
+      emit StrategyLiquidityRequested(0); // 0 indicates full strategy assets withdrawal for settlement
     } catch Error(string memory reason) {
       emit StrategyLiquidityRequestFailed(
         0,
-        string(abi.encodePacked("BaseVol settlement withdrawal failed: ", reason))
+        string(abi.encodePacked("Strategy settlement withdrawal failed: ", reason))
       );
     } catch {
-      emit StrategyLiquidityRequestFailed(0, "BaseVol settlement withdrawal failed: Unknown error");
-    }
-  }
-
-  /**
-   * @notice Request liquidity from strategy
-   */
-  function _requestLiquidityFromStrategy(uint256 amount) internal {
-    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    address strategyAddr = s.strategy;
-
-    if (strategyAddr == address(0)) {
-      emit StrategyLiquidityRequestFailed(amount, "Strategy not set");
-      return;
-    }
-
-    // Request specific amount of liquidity from strategy
-    // Strategy will intelligently source from: 1) idle assets, 2) BaseVol, 3) Morpho
-    try IGenesisStrategy(strategyAddr).provideLiquidityForWithdrawals(amount) {
-      emit StrategyLiquidityRequested(amount);
-    } catch Error(string memory reason) {
-      // Strategy call failure should not stop vault settlement
-      // Fallback to basic asset processing
-      try IGenesisStrategy(strategyAddr).processAssetsToWithdraw() {
-        emit StrategyLiquidityRequested(amount);
-        emit StrategyLiquidityRequestFailed(
-          amount,
-          string(abi.encodePacked("Primary method failed: ", reason, " - Used fallback"))
-        );
-      } catch Error(string memory fallbackReason) {
-        // Both methods failed - log the failures and continue
-        emit StrategyLiquidityRequestFailed(
-          amount,
-          string(
-            abi.encodePacked(
-              "Both methods failed - Primary: ",
-              reason,
-              " Fallback: ",
-              fallbackReason
-            )
-          )
-        );
-      } catch {
-        // Fallback method failed with unknown error
-        emit StrategyLiquidityRequestFailed(
-          amount,
-          string(abi.encodePacked("Primary failed: ", reason, " - Fallback failed: Unknown error"))
-        );
-      }
-    } catch {
-      // Primary method failed with unknown error - try fallback
-      try IGenesisStrategy(strategyAddr).processAssetsToWithdraw() {
-        emit StrategyLiquidityRequested(amount);
-        emit StrategyLiquidityRequestFailed(
-          amount,
-          "Primary method failed: Unknown error - Used fallback"
-        );
-      } catch Error(string memory fallbackReason) {
-        emit StrategyLiquidityRequestFailed(
-          amount,
-          string(
-            abi.encodePacked(
-              "Both methods failed - Primary: Unknown error, Fallback: ",
-              fallbackReason
-            )
-          )
-        );
-      } catch {
-        emit StrategyLiquidityRequestFailed(amount, "Both methods failed with unknown errors");
-      }
+      emit StrategyLiquidityRequestFailed(
+        0,
+        "Strategy settlement withdrawal failed: Unknown error"
+      );
     }
   }
 
