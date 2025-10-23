@@ -91,6 +91,7 @@ contract MorphoVaultManager is
   }
 
   /// @notice Deposits assets from Strategy to Morpho Vault
+  /// @dev Strategy must transfer assets to this contract before calling this function
   /// @param amount The amount of assets to deposit
   function depositToMorpho(
     uint256 amount
@@ -100,6 +101,10 @@ contract MorphoVaultManager is
     if (amount > MorphoVaultManagerStorage.layout().maxStrategyDeposit) revert ExceedsMaxDeposit();
 
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+
+    // Verify that we have received the assets from strategy
+    uint256 balance = $.asset.balanceOf(address(this));
+    if (balance < amount) revert InsufficientBalance();
 
     try $.morphoVault.deposit(amount, address(this)) returns (uint256 shares) {
       // Update global state
@@ -130,8 +135,9 @@ contract MorphoVaultManager is
     uint256 availableAssets = $.morphoVault.maxWithdraw(address(this));
     if (availableAssets < amount) revert InsufficientBalance();
 
-    try $.morphoVault.withdraw(amount, strategy(), address(this)) returns (uint256 shares) {
+    try $.morphoVault.withdraw(amount, address(this), address(this)) returns (uint256 shares) {
       $.totalUtilized -= amount;
+      $.totalWithdrawn += amount;
       $.morphoShares -= shares;
 
       emit WithdrawnFromMorpho(
@@ -140,6 +146,9 @@ contract MorphoVaultManager is
         shares,
         $.morphoVault.balanceOf(address(this))
       );
+
+      // Transfer assets to strategy
+      $.asset.safeTransfer(strategy(), amount);
 
       // Call strategy callback on success
       IGenesisStrategy($.strategy).morphoWithdrawCompletedCallback(amount, true);
@@ -162,8 +171,9 @@ contract MorphoVaultManager is
     uint256 availableShares = $.morphoVault.balanceOf(address(this));
     if (availableShares < shares) revert InsufficientBalance();
 
-    try $.morphoVault.redeem(shares, strategy(), address(this)) returns (uint256 assets) {
+    try $.morphoVault.redeem(shares, address(this), address(this)) returns (uint256 assets) {
       $.totalUtilized -= assets;
+      $.totalWithdrawn += assets;
       $.morphoShares -= shares;
 
       emit RedeemedFromMorpho(
@@ -172,6 +182,9 @@ contract MorphoVaultManager is
         assets,
         $.morphoVault.balanceOf(address(this))
       );
+
+      // Transfer assets to strategy
+      $.asset.safeTransfer(strategy(), assets);
 
       // Call strategy callback on success
       IGenesisStrategy($.strategy).morphoRedeemCompletedCallback(shares, assets, true);
@@ -190,6 +203,7 @@ contract MorphoVaultManager is
     // Withdraw from Morpho Vault
     try $.morphoVault.withdraw(amount, owner(), address(this)) returns (uint256 shares) {
       $.totalUtilized -= amount;
+      $.totalWithdrawn += amount;
       $.morphoShares -= shares;
 
       emit WithdrawnFromMorpho(strategy(), amount, shares, $.morphoVault.balanceOf(address(this)));
@@ -248,7 +262,7 @@ contract MorphoVaultManager is
   }
 
   function totalUtilized() public view returns (uint256) {
-    return morphoAssetBalance(); // Real-time asset value
+    return MorphoVaultManagerStorage.layout().totalUtilized;
   }
 
   /// @notice Gets the current yield/profit from Morpho

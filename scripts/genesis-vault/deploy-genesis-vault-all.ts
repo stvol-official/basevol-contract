@@ -12,6 +12,7 @@ import config from "../../config";
  *
  * Usage:
  * npx hardhat run --network base_sepolia scripts/genesis-vault/deploy-genesis-vault-all.ts
+ * npx hardhat run --network base scripts/genesis-vault/deploy-genesis-vault-all.ts
  *
  * Environment Variables:
  * - CLEARING_HOUSE_ADMIN_KEY: Private key of ClearingHouse admin (required for addBaseVolManager)
@@ -35,11 +36,11 @@ interface DeploymentConfig {
 const DEPLOYMENT_CONFIG: Record<SupportedNetwork, DeploymentConfig> = {
   base_sepolia: {
     baseVolContract: "0x26b0A1e85f66C4864d6ABB3B146714494B56A673", // 1 hour BaseVol address
-    keeperAddress: "0x879720F64fD5784B0109eb7410247d5254C58c1B", // TODO: Update with keeper address
+    keeperAddress: "0x879720F64fD5784B0109eb7410247d5254C58c1B", // keeper address
   },
   base: {
-    baseVolContract: "0x0000000000000000000000000000000000000000", // TODO: Update with 1day BaseVol address
-    keeperAddress: "0x0000000000000000000000000000000000000000", // TODO: Update with keeper address
+    baseVolContract: "0x5B2eA3A959b525f95F80F29C0C52Cd9cC925DB74", // 1 day BaseVol address
+    keeperAddress: "0x38b3ed1018aef0590d0fbf54a2fe3c2c78f99e5a", // keeper address
   },
 };
 
@@ -291,7 +292,7 @@ async function step1_deployGenesisVault(
     ethers.parseEther("0"), // hurdleRate (0%)
     ethers.parseUnits("0", 6), // entryCost (0 USDC)
     ethers.parseUnits("1", 6), // exitCost (1 USDC)
-    ethers.parseUnits("10000", 6), // userDepositLimit (10,000 USDC)
+    ethers.parseUnits("300000", 6), // userDepositLimit (300,000 USDC)
     ethers.parseUnits("1000000", 6), // vaultDepositLimit (1,000,000 USDC)
   );
   await initTx.wait();

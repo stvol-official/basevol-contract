@@ -29,8 +29,12 @@ export default {
       base: "0x3EECcDA279Ce530E0107004cdE4f018E2513B006",
     },
     Strategy: {
-      base_sepolia: "0x0000000000000000000000000000000000000000",
-      base: "0x0000000000000000000000000000000000000000",
+      base_sepolia: "0x6F5B12b9b041BC76e8B680219BD2d67c62F95972", // Genesis Strategy Address
+      base: "0xd3cDA3ec2DE563DB4c169efc0b8B1786aa53E2AD",
+    },
+    MorphoVault: {
+      base_sepolia: "0x0000000000000000000000000000000000000000", // TODO: Add Morpho Vault address
+      base: "0x7BfA7C4f149E7415b73bdeDfe609237e29CBF34A", // Spark USDC Vault Address
     },
   },
   CommissionFee: {

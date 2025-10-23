@@ -40,4 +40,9 @@ interface IMorphoVaultManager {
   /// @notice Gets the current yield/profit from Morpho
   /// @return The accumulated yield
   function currentYield() external view returns (uint256);
+
+  /// @notice Gets the configuration
+  /// @return maxStrategyDeposit The maximum amount of assets that can be deposited to Morpho Vault
+  /// @return minStrategyDeposit The minimum amount of assets that can be deposited to Morpho Vault
+  function config() external view returns (uint256 maxStrategyDeposit, uint256 minStrategyDeposit);
 }

@@ -32,4 +32,13 @@ interface IBaseVolManager {
   /// @notice Gets the total utilized amount
   /// @return The total utilized amount
   function totalUtilized() external view returns (uint256);
+
+  /// @notice Gets the configuration
+  /// @return maxStrategyDeposit The maximum amount of assets that can be deposited to BaseVol Manager
+  /// @return minStrategyDeposit The minimum amount of assets that can be deposited to BaseVol Manager
+  /// @return maxTotalExposure The maximum amount of assets that can be used for total exposure
+  function config()
+    external
+    view
+    returns (uint256 maxStrategyDeposit, uint256 minStrategyDeposit, uint256 maxTotalExposure);
 }

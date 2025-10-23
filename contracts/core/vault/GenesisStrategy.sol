@@ -912,6 +912,28 @@ contract GenesisStrategy is
                           REBALANCING LOGIC
     //////////////////////////////////////////////////////////////*/
 
+  /// @notice Deposits to BaseVol with config validation
+  function _depositToBaseVol(uint256 amount) internal {
+    if (amount == 0) return;
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    (uint256 max, uint256 min, ) = $.baseVolManager.config();
+    if (amount < min) return;
+    uint256 adjusted = amount > max ? max : amount;
+    IERC20(asset()).safeTransfer(address($.baseVolManager), adjusted);
+    $.baseVolManager.depositToClearingHouse(adjusted);
+  }
+
+  /// @notice Deposits to Morpho with config validation
+  function _depositToMorpho(uint256 amount) internal {
+    if (amount == 0) return;
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    (uint256 max, uint256 min) = $.morphoVaultManager.config();
+    if (amount < min) return;
+    uint256 adjusted = amount > max ? max : amount;
+    IERC20(asset()).safeTransfer(address($.morphoVaultManager), adjusted);
+    $.morphoVaultManager.depositToMorpho(adjusted);
+  }
+
   /// @notice Execute rebalancing between BaseVol and Morpho/idle with idle assets
   /// @dev Handles three cases: increase BaseVol, increase Morpho, or already balanced
   /// @dev If Morpho is not configured, keeps 90% as idle and 10% in BaseVol
@@ -957,40 +979,22 @@ contract GenesisStrategy is
 
       // Use idle assets first
       if (idleAssets >= needed) {
-        // Sufficient idle assets to reach target BaseVol
-        // Transfer from strategy to baseVolManager
-        IERC20(asset()).safeTransfer(address($.baseVolManager), needed);
-        $.baseVolManager.depositToClearingHouse(needed);
-
-        // Deposit remaining idle to Morpho
-        uint256 remainingIdle = idleAssets - needed;
-        if (remainingIdle > 0) {
-          IERC20(asset()).safeTransfer(address($.morphoVaultManager), remainingIdle);
-          $.morphoVaultManager.depositToMorpho(remainingIdle);
-        }
+        _depositToBaseVol(needed);
+        _depositToMorpho(idleAssets - needed);
         return;
       }
 
       // Need to withdraw from Morpho
       uint256 fromMorpho = needed - idleAssets;
       if (currentMorpho >= fromMorpho) {
-        // Deposit idle assets to BaseVol first
-        if (idleAssets > 0) {
-          IERC20(asset()).safeTransfer(address($.baseVolManager), idleAssets);
-          $.baseVolManager.depositToClearingHouse(idleAssets);
-        }
-
-        // Withdraw from Morpho and deposit to BaseVol (handled by callback)
+        _depositToBaseVol(idleAssets);
         $.morphoVaultManager.withdrawFromMorpho(fromMorpho);
         return;
       }
 
       // Not enough assets to reach target - use all available
       emit DebugLog("Insufficient assets to reach target BaseVol");
-      if (idleAssets > 0) {
-        IERC20(asset()).safeTransfer(address($.baseVolManager), idleAssets);
-        $.baseVolManager.depositToClearingHouse(idleAssets);
-      }
+      _depositToBaseVol(idleAssets);
       if (currentMorpho > 0) {
         $.morphoVaultManager.withdrawFromMorpho(currentMorpho);
       }
@@ -1015,12 +1019,7 @@ contract GenesisStrategy is
 
       // Withdraw excess from BaseVol (will be deposited to Morpho via callback)
       $.baseVolManager.withdrawFromClearingHouse(excess);
-
-      // Also deposit any idle assets to Morpho
-      if (idleAssets > 0) {
-        IERC20(asset()).safeTransfer(address($.morphoVaultManager), idleAssets);
-        $.morphoVaultManager.depositToMorpho(idleAssets);
-      }
+      _depositToMorpho(idleAssets);
       return;
     }
 
@@ -1030,23 +1029,10 @@ contract GenesisStrategy is
     );
 
     if (idleAssets > 0) {
-      // Distribute idle assets according to target percentages
       uint256 toBaseVol = idleAssets.mulDiv($.baseVolTargetPct, FLOAT_PRECISION);
-      uint256 toMorpho = idleAssets - toBaseVol;
-
-      // Deposit to BaseVol
-      if (toBaseVol > 0) {
-        IERC20(asset()).safeTransfer(address($.baseVolManager), toBaseVol);
-        $.baseVolManager.depositToClearingHouse(toBaseVol);
-      }
-
-      // Deposit to Morpho
-      if (toMorpho > 0) {
-        IERC20(asset()).safeTransfer(address($.morphoVaultManager), toMorpho);
-        $.morphoVaultManager.depositToMorpho(toMorpho);
-      }
+      _depositToBaseVol(toBaseVol);
+      _depositToMorpho(idleAssets - toBaseVol);
     } else {
-      // No idle assets and already balanced
       _setStrategyStatus(StrategyStatus.IDLE);
     }
 
@@ -1082,32 +1068,7 @@ contract GenesisStrategy is
     // Case 1: Need to increase BaseVol (currently < 10%)
     if (currentBaseVol < targetBaseVol) {
       uint256 needed = targetBaseVol - currentBaseVol;
-
-      if (idleAssets >= needed) {
-        // Sufficient idle assets to reach target
-        // Transfer from strategy to baseVolManager
-        IERC20(asset()).safeTransfer(address($.baseVolManager), needed);
-        $.baseVolManager.depositToClearingHouse(needed);
-        emit DebugLog(
-          string(abi.encodePacked("Deposited ", needed.toString(), " to BaseVol from idle assets"))
-        );
-      } else {
-        // Not enough idle assets, deposit all available
-        if (idleAssets > 0) {
-          IERC20(asset()).safeTransfer(address($.baseVolManager), idleAssets);
-          $.baseVolManager.depositToClearingHouse(idleAssets);
-          emit DebugLog(
-            string(
-              abi.encodePacked(
-                "Deposited all idle assets (",
-                idleAssets.toString(),
-                ") to BaseVol, still need ",
-                (needed - idleAssets).toString()
-              )
-            )
-          );
-        }
-      }
+      _depositToBaseVol(idleAssets >= needed ? needed : idleAssets);
       _setStrategyStatus(StrategyStatus.IDLE);
       return;
     }
@@ -1218,30 +1179,12 @@ contract GenesisStrategy is
 
       // Check if we're in rebalancing mode
       if (strategyStatus() == StrategyStatus.REBALANCING) {
-        // During rebalancing, move assets to Morpho if configured
         if (address($.morphoVaultManager) != address(0)) {
-          IERC20(asset()).safeTransfer(address($.morphoVaultManager), amount);
-          $.morphoVaultManager.depositToMorpho(amount);
-          emit DebugLog(
-            string(
-              abi.encodePacked("Rebalancing: Moved ", amount.toString(), " from BaseVol to Morpho")
-            )
-          );
-          return; // Don't transfer to vault during rebalancing
+          _depositToMorpho(amount);
         } else {
-          // Morpho not configured, keep as idle in strategy (no transfer needed, already in strategy)
           _setStrategyStatus(StrategyStatus.IDLE);
-          emit DebugLog(
-            string(
-              abi.encodePacked(
-                "Rebalancing: Kept ",
-                amount.toString(),
-                " from BaseVol as idle in strategy - Morpho not configured"
-              )
-            )
-          );
-          return;
         }
+        return;
       }
 
       // Check if this is part of a vault withdrawal request
@@ -1370,15 +1313,8 @@ contract GenesisStrategy is
 
       // Check if we're in rebalancing mode
       if (strategyStatus() == StrategyStatus.REBALANCING) {
-        // During rebalancing, move assets to BaseVol
-        IERC20(asset()).safeTransfer(address($.baseVolManager), amount);
-        $.baseVolManager.depositToClearingHouse(amount);
-        emit DebugLog(
-          string(
-            abi.encodePacked("Rebalancing: Moved ", amount.toString(), " from Morpho to BaseVol")
-          )
-        );
-        return; // Don't emit normal events during rebalancing
+        _depositToBaseVol(amount);
+        return;
       }
 
       // Check if this is part of a vault withdrawal request
