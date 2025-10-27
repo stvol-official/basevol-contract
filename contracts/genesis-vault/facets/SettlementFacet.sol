@@ -220,16 +220,100 @@ contract SettlementFacet {
     try IGenesisStrategy(strategyAddr).withdrawAllStrategyAssetsForSettlement() {
       emit StrategyLiquidityRequested(0); // 0 indicates full strategy assets withdrawal for settlement
     } catch Error(string memory reason) {
-      emit StrategyLiquidityRequestFailed(
-        0,
-        string(abi.encodePacked("Strategy settlement withdrawal failed: ", reason))
+      // emit StrategyLiquidityRequestFailed(
+      //   0,
+      //   string(abi.encodePacked("Strategy settlement withdrawal failed: ", reason))
+      // );
+
+      revert(string(abi.encodePacked("StrategyLiquidityRequestFailed: ", reason)));
+    } catch Panic(uint256 errorCode) {
+      // emit StrategyLiquidityRequestFailed(
+      //   0,
+      //   string(
+      //     abi.encodePacked(
+      //       "Strategy settlement withdrawal failed: Panic error code ",
+      //       _uint2str(errorCode)
+      //     )
+      //   )
+      // );
+      revert(
+        string(
+          abi.encodePacked(
+            "StrategyLiquidityRequestFailed: Panic error code ",
+            _uint2str(errorCode)
+          )
+        )
       );
-    } catch {
-      emit StrategyLiquidityRequestFailed(
-        0,
-        "Strategy settlement withdrawal failed: Unknown error"
-      );
+    } catch (bytes memory lowLevelData) {
+      // Log low-level error data for debugging
+      string memory errorMsg = "Strategy settlement withdrawal failed: Unknown error";
+      if (lowLevelData.length > 0) {
+        // Try to decode as string
+        if (lowLevelData.length >= 68) {
+          // Standard Error(string) selector is 0x08c379a0
+          bytes4 errorSelector;
+          assembly {
+            errorSelector := mload(add(lowLevelData, 0x20))
+          }
+          if (errorSelector == 0x08c379a0) {
+            // Decode the error string
+            assembly {
+              lowLevelData := add(lowLevelData, 0x04)
+            }
+            errorMsg = string(
+              abi.encodePacked(
+                "Strategy settlement withdrawal failed: ",
+                abi.decode(lowLevelData, (string))
+              )
+            );
+          } else {
+            errorMsg = string(
+              abi.encodePacked(
+                "Strategy settlement withdrawal failed: Raw error (bytes length: ",
+                _uint2str(lowLevelData.length),
+                ")"
+              )
+            );
+          }
+        } else {
+          errorMsg = string(
+            abi.encodePacked(
+              "Strategy settlement withdrawal failed: Raw error (bytes length: ",
+              _uint2str(lowLevelData.length),
+              ")"
+            )
+          );
+        }
+      }
+      // emit StrategyLiquidityRequestFailed(0, errorMsg);
+      revert(string(abi.encodePacked("StrategyLiquidityRequestFailed: ", errorMsg)));
     }
+  }
+
+  /**
+   * @notice Convert uint256 to string
+   * @dev Helper function for error logging
+   */
+  function _uint2str(uint256 _i) internal pure returns (string memory) {
+    if (_i == 0) {
+      return "0";
+    }
+    uint256 j = _i;
+    uint256 len;
+    while (j != 0) {
+      len++;
+      j /= 10;
+    }
+    bytes memory bstr = new bytes(len);
+    uint256 k = len;
+    while (_i != 0) {
+      k = k - 1;
+      uint8 temp = (48 + uint8(_i - (_i / 10) * 10));
+      bytes1 b1 = bytes1(temp);
+      bstr[k] = b1;
+      _i /= 10;
+    }
+    return string(bstr);
   }
 
   /**

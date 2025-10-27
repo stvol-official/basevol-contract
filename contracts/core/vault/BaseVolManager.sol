@@ -141,7 +141,12 @@ contract BaseVolManager is
     if (availableBalance < amount) revert InsufficientBalance();
 
     try $.clearingHouse.baseVolManagerWithdraw(amount) {
-      $.totalUtilized -= amount;
+      // Safe decrease to prevent underflow
+      if ($.totalUtilized >= amount) {
+        $.totalUtilized -= amount;
+      } else {
+        $.totalUtilized = 0;
+      }
 
       emit WithdrawnFromClearingHouse(
         address($.strategy),
@@ -190,7 +195,12 @@ contract BaseVolManager is
 
     // Withdraw from ClearingHouse
     try $.clearingHouse.baseVolManagerWithdraw(amount) {
-      $.totalUtilized -= amount;
+      // Safe decrease to prevent underflow
+      if ($.totalUtilized >= amount) {
+        $.totalUtilized -= amount;
+      } else {
+        $.totalUtilized = 0;
+      }
 
       emit WithdrawnFromClearingHouse(
         strategy(),

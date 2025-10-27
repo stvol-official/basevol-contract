@@ -136,7 +136,12 @@ contract MorphoVaultManager is
     if (availableAssets < amount) revert InsufficientBalance();
 
     try $.morphoVault.withdraw(amount, address(this), address(this)) returns (uint256 shares) {
-      $.totalUtilized -= amount;
+      // Safe decrease to prevent underflow
+      if ($.totalUtilized >= amount) {
+        $.totalUtilized -= amount;
+      } else {
+        $.totalUtilized = 0;
+      }
       $.totalWithdrawn += amount;
       $.morphoShares -= shares;
 
@@ -191,7 +196,12 @@ contract MorphoVaultManager is
     if (availableShares < shares) revert InsufficientBalance();
 
     try $.morphoVault.redeem(shares, address(this), address(this)) returns (uint256 assets) {
-      $.totalUtilized -= assets;
+      // Safe decrease to prevent underflow
+      if ($.totalUtilized >= assets) {
+        $.totalUtilized -= assets;
+      } else {
+        $.totalUtilized = 0;
+      }
       $.totalWithdrawn += assets;
       $.morphoShares -= shares;
 
@@ -240,7 +250,12 @@ contract MorphoVaultManager is
 
     // Withdraw from Morpho Vault
     try $.morphoVault.withdraw(amount, owner(), address(this)) returns (uint256 shares) {
-      $.totalUtilized -= amount;
+      // Safe decrease to prevent underflow
+      if ($.totalUtilized >= amount) {
+        $.totalUtilized -= amount;
+      } else {
+        $.totalUtilized = 0;
+      }
       $.totalWithdrawn += amount;
       $.morphoShares -= shares;
 
