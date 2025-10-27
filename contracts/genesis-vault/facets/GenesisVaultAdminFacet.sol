@@ -136,6 +136,15 @@ contract GenesisVaultAdminFacet {
   }
 
   /**
+   * @notice Transfer ownership of the contract
+   * @param _newOwner New owner address
+   */
+  function transferOwnership(address _newOwner) external onlyOwner {
+    if (_newOwner == address(0)) revert InvalidAddress();
+    LibDiamond.setContractOwner(_newOwner);
+  }
+
+  /**
    * @notice Set admin address
    * @param _admin New admin address
    */
