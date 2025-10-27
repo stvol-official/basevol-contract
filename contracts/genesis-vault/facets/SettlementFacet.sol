@@ -41,6 +41,12 @@ contract SettlementFacet {
     uint256 currentSharePrice,
     uint256 userWAEP
   );
+  event SettlementBalanceWarning(
+    uint256 indexed epoch,
+    uint256 requiredAssets,
+    uint256 availableAssets,
+    uint256 deficit
+  );
 
   // ============ Custom Errors ============
   error RoundAlreadySettled(uint256 epoch);
@@ -158,6 +164,17 @@ contract SettlementFacet {
 
     // 2. Check current available assets (now includes all withdrawn strategy assets)
     uint256 availableAssets = LibGenesisVault.idleAssets();
+
+    // 2.1. Verify sufficient balance for settlement
+    // Note: This is a warning check. Individual user processing will also verify balance.
+    if (availableAssets < requiredRedeemAssets) {
+      emit SettlementBalanceWarning(
+        epoch,
+        requiredRedeemAssets,
+        availableAssets,
+        requiredRedeemAssets - availableAssets
+      );
+    }
 
     // 3. Auto-process all user requests for this epoch
     _autoProcessEpochRequests(epoch);
@@ -303,6 +320,14 @@ contract SettlementFacet {
     // Apply exit cost - user receives net amount after fee deduction
     uint256 exitCostAmount = s.exitCost;
     uint256 netAssets = grossAssets - exitCostAmount - performanceFeeAmount;
+
+    // Check vault balance before any transfers
+    uint256 totalRequired = exitCostAmount + performanceFeeAmount + netAssets;
+    uint256 currentBalance = s.asset.balanceOf(address(this));
+    require(
+      currentBalance >= totalRequired,
+      "SettlementFacet: Insufficient vault balance for redeem"
+    );
 
     // Transfer exit cost immediately to fee recipient
     LibGenesisVault.transferFeesToRecipient(exitCostAmount, "exit");
