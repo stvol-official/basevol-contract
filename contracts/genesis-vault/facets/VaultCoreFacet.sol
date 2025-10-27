@@ -526,6 +526,10 @@ contract VaultCoreFacet {
     uint256 finalAmount = grossAssetsNeeded - exitCostAmount - totalPerformanceFees;
     require(finalAmount >= assets, "VaultCoreFacet: Insufficient after fees");
 
+    // Check vault balance before transfer
+    uint256 currentBalance = s.asset.balanceOf(address(this));
+    require(currentBalance >= assets, "VaultCoreFacet: Insufficient vault balance for withdraw");
+
     s.asset.safeTransfer(receiver, assets);
 
     emit Withdraw(msg.sender, receiver, controller, assets, shares);
@@ -602,6 +606,10 @@ contract VaultCoreFacet {
 
     // Final assets = total - exit cost - performance fees
     assets = totalAssetsBeforeFees - exitCostAmount - totalPerformanceFees;
+
+    // Check vault balance before transfer
+    uint256 currentBalance = s.asset.balanceOf(address(this));
+    require(currentBalance >= assets, "VaultCoreFacet: Insufficient vault balance for redeem");
 
     s.asset.safeTransfer(receiver, assets);
 

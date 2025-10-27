@@ -319,15 +319,34 @@ contract GenesisStrategy is
     // 3. Transfer idle assets to vault immediately
     uint256 idleAmount = getStrategyIdleAssets();
     if (idleAmount > 0) {
-      IERC20(asset()).safeTransfer(address($.vault), idleAmount);
-      emit DebugLog(
-        string(
-          abi.encodePacked(
-            "Transferring idle assets to vault for settlement: ",
-            idleAmount.toString()
+      // Double-check actual balance before transfer
+      uint256 actualBalance = IERC20(asset()).balanceOf(address(this));
+      uint256 transferAmount = idleAmount > actualBalance ? actualBalance : idleAmount;
+
+      if (transferAmount < idleAmount) {
+        emit DebugLog(
+          string(
+            abi.encodePacked(
+              "Warning: Strategy idle balance mismatch. Expected: ",
+              idleAmount.toString(),
+              ", Actual: ",
+              actualBalance.toString()
+            )
           )
-        )
-      );
+        );
+      }
+
+      if (transferAmount > 0) {
+        IERC20(asset()).safeTransfer(address($.vault), transferAmount);
+        emit DebugLog(
+          string(
+            abi.encodePacked(
+              "Transferring idle assets to vault for settlement: ",
+              transferAmount.toString()
+            )
+          )
+        );
+      }
     }
 
     // If no async withdrawals are pending, reset status
@@ -1164,12 +1183,34 @@ contract GenesisStrategy is
 
       // Check if this is a settlement withdrawal
       if ($.isSettlementWithdrawal) {
+        // Check strategy balance before transfer
+        uint256 strategyBalance = IERC20(asset()).balanceOf(address(this));
+        uint256 transferAmount = amount > strategyBalance ? strategyBalance : amount;
+
+        if (transferAmount < amount) {
+          emit DebugLog(
+            string(
+              abi.encodePacked(
+                "Warning: Strategy balance insufficient. Expected: ",
+                amount.toString(),
+                ", Available: ",
+                strategyBalance.toString()
+              )
+            )
+          );
+        }
+
         // Transfer to vault as idle assets
-        IERC20(asset()).safeTransfer(address(vault()), amount);
+        if (transferAmount > 0) {
+          IERC20(asset()).safeTransfer(address(vault()), transferAmount);
+        }
 
         emit DebugLog(
           string(
-            abi.encodePacked("Settlement withdrawal from BaseVol completed: ", amount.toString())
+            abi.encodePacked(
+              "Settlement withdrawal from BaseVol completed: ",
+              transferAmount.toString()
+            )
           )
         );
 
@@ -1321,12 +1362,34 @@ contract GenesisStrategy is
 
       // Check if this is a settlement withdrawal
       if ($.isSettlementWithdrawal) {
+        // Check strategy balance before transfer
+        uint256 strategyBalance = IERC20(asset()).balanceOf(address(this));
+        uint256 transferAmount = amount > strategyBalance ? strategyBalance : amount;
+
+        if (transferAmount < amount) {
+          emit DebugLog(
+            string(
+              abi.encodePacked(
+                "Warning: Strategy balance insufficient. Expected: ",
+                amount.toString(),
+                ", Available: ",
+                strategyBalance.toString()
+              )
+            )
+          );
+        }
+
         // Transfer to vault as idle assets
-        IERC20(asset()).safeTransfer(address(vault()), amount);
+        if (transferAmount > 0) {
+          IERC20(asset()).safeTransfer(address(vault()), transferAmount);
+        }
 
         emit DebugLog(
           string(
-            abi.encodePacked("Settlement withdrawal from Morpho completed: ", amount.toString())
+            abi.encodePacked(
+              "Settlement withdrawal from Morpho completed: ",
+              transferAmount.toString()
+            )
           )
         );
 

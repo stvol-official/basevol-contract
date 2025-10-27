@@ -343,6 +343,10 @@ library LibGenesisVault {
       return;
     }
 
+    // Check vault balance before transfer
+    uint256 currentBalance = s.asset.balanceOf(address(this));
+    require(currentBalance >= amount, "LibGenesisVault: Insufficient vault balance for fee transfer");
+
     // Transfer fees to recipient
     s.asset.safeTransfer(recipient, amount);
 
