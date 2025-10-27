@@ -149,14 +149,34 @@ contract BaseVolManager is
         $.clearingHouse.userBalances(address(this))
       );
 
+      // Check actual balance before transfer
       IERC20 _asset = $.asset;
-      _asset.safeTransfer(strategy(), amount);
+      uint256 actualBalance = _asset.balanceOf(address(this));
+      uint256 transferAmount = amount > actualBalance ? actualBalance : amount;
 
-      // Instead, call the strategy callback to let it handle the asset transfer
-      IGenesisStrategy($.strategy).baseVolWithdrawCompletedCallback(amount, true);
+      if (transferAmount < amount) {
+        emit DebugLog(
+          string(
+            abi.encodePacked(
+              "Warning: BaseVolManager balance insufficient. Expected: ",
+              amount.toString(),
+              ", Available: ",
+              actualBalance.toString()
+            )
+          )
+        );
+      }
+
+      // Transfer available amount to strategy
+      if (transferAmount > 0) {
+        _asset.safeTransfer(strategy(), transferAmount);
+      }
+
+      // Call strategy callback with actual transferred amount
+      IGenesisStrategy($.strategy).baseVolWithdrawCompletedCallback(transferAmount, true);
     } catch {
       // Failure - call strategy callback on failure
-      IGenesisStrategy($.strategy).baseVolWithdrawCompletedCallback(amount, false);
+      IGenesisStrategy($.strategy).baseVolWithdrawCompletedCallback(0, false);
       revert("Withdraw from ClearingHouse failed");
     }
   }

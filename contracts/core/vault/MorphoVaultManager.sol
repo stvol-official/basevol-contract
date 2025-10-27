@@ -147,11 +147,30 @@ contract MorphoVaultManager is
         $.morphoVault.balanceOf(address(this))
       );
 
-      // Transfer assets to strategy
-      $.asset.safeTransfer(strategy(), amount);
+      // Check actual balance before transfer
+      uint256 actualBalance = $.asset.balanceOf(address(this));
+      uint256 transferAmount = amount > actualBalance ? actualBalance : amount;
 
-      // Call strategy callback on success
-      IGenesisStrategy($.strategy).morphoWithdrawCompletedCallback(amount, true);
+      if (transferAmount < amount) {
+        emit DebugLog(
+          string(
+            abi.encodePacked(
+              "Warning: MorphoVaultManager balance insufficient. Expected: ",
+              amount.toString(),
+              ", Available: ",
+              actualBalance.toString()
+            )
+          )
+        );
+      }
+
+      // Transfer available amount to strategy
+      if (transferAmount > 0) {
+        $.asset.safeTransfer(strategy(), transferAmount);
+      }
+
+      // Call strategy callback with actual transferred amount
+      IGenesisStrategy($.strategy).morphoWithdrawCompletedCallback(transferAmount, true);
     } catch {
       // Failure - call strategy callback on failure
       IGenesisStrategy($.strategy).morphoWithdrawCompletedCallback(amount, false);
@@ -183,11 +202,30 @@ contract MorphoVaultManager is
         $.morphoVault.balanceOf(address(this))
       );
 
-      // Transfer assets to strategy
-      $.asset.safeTransfer(strategy(), assets);
+      // Check actual balance before transfer
+      uint256 actualBalance = $.asset.balanceOf(address(this));
+      uint256 transferAmount = assets > actualBalance ? actualBalance : assets;
 
-      // Call strategy callback on success
-      IGenesisStrategy($.strategy).morphoRedeemCompletedCallback(shares, assets, true);
+      if (transferAmount < assets) {
+        emit DebugLog(
+          string(
+            abi.encodePacked(
+              "Warning: MorphoVaultManager balance insufficient for redeem. Expected: ",
+              assets.toString(),
+              ", Available: ",
+              actualBalance.toString()
+            )
+          )
+        );
+      }
+
+      // Transfer available amount to strategy
+      if (transferAmount > 0) {
+        $.asset.safeTransfer(strategy(), transferAmount);
+      }
+
+      // Call strategy callback with actual transferred amount
+      IGenesisStrategy($.strategy).morphoRedeemCompletedCallback(shares, transferAmount, true);
     } catch {
       // Failure - call strategy callback on failure
       IGenesisStrategy($.strategy).morphoRedeemCompletedCallback(shares, 0, false);
