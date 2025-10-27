@@ -198,7 +198,7 @@ contract GenesisStrategy is
   /// @dev Called after round settlement to rebalance all assets including idle assets
   /// @dev If Morpho is configured: 10% BaseVol, 90% Morpho
   /// @dev If Morpho is NOT configured: 10% BaseVol, 90% idle (waiting for Morpho)
-  function keeperRebalance() external authCaller(operator()) whenIdle nonReentrant {
+  function keeperRebalance() external authCaller(operator()) nonReentrant {
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
     IGenesisVault _vault = $.vault;
 
