@@ -3,7 +3,7 @@ pragma solidity ^0.8.4;
 
 import { LibBaseVolStrike } from "../libraries/LibBaseVolStrike.sol";
 import { LibDiamond } from "../libraries/LibDiamond.sol";
-import { PriceInfo } from "../types/Types.sol";
+import { PriceInfo, CommissionTier } from "../types/Types.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IPyth } from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
@@ -16,6 +16,9 @@ contract AdminFacet {
   uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
 
   event PriceIdAdded(uint256 indexed productId, bytes32 priceId, string symbol);
+  event TierCommissionRateSet(CommissionTier indexed tier, uint256 rate);
+  event UserTierSet(address indexed user, CommissionTier tier);
+  event UserTierRemoved(address indexed user);
 
   modifier onlyOwner() {
     LibDiamond.enforceIsContractOwner();
@@ -153,5 +156,66 @@ contract AdminFacet {
     bvs.priceIdCount++;
 
     emit PriceIdAdded(_productId, _priceId, _symbol);
+  }
+
+  // Tier management functions
+  function setTierCommissionRate(CommissionTier tier, uint256 rate) external onlyAdmin {
+    if (rate > MAX_COMMISSION_FEE) revert LibBaseVolStrike.InvalidCommissionFee();
+
+    LibBaseVolStrike.setTierCommissionRate(tier, rate);
+
+    emit TierCommissionRateSet(tier, rate);
+  }
+
+  function setUserTier(address user, CommissionTier tier) external onlyAdmin {
+    if (user == address(0)) revert LibBaseVolStrike.InvalidAddress();
+
+    LibBaseVolStrike.setCommissionTier(user, tier);
+
+    emit UserTierSet(user, tier);
+  }
+
+  function setUserTiersBatch(
+    address[] calldata users,
+    CommissionTier[] calldata tiers
+  ) external onlyAdmin {
+    require(users.length == tiers.length, "Arrays length mismatch");
+
+    for (uint256 i = 0; i < users.length; i++) {
+      if (users[i] != address(0)) {
+        LibBaseVolStrike.setCommissionTier(users[i], tiers[i]);
+        emit UserTierSet(users[i], tiers[i]);
+      }
+    }
+  }
+
+  function removeUserTier(address user) external onlyAdmin {
+    if (user == address(0)) revert LibBaseVolStrike.InvalidAddress();
+
+    LibBaseVolStrike.removeCommissionTier(user);
+
+    emit UserTierRemoved(user);
+  }
+
+  function removeUserTiersBatch(address[] calldata users) external onlyAdmin {
+    for (uint256 i = 0; i < users.length; i++) {
+      if (users[i] != address(0)) {
+        LibBaseVolStrike.removeCommissionTier(users[i]);
+        emit UserTierRemoved(users[i]);
+      }
+    }
+  }
+
+  function getUserTier(address user) external view returns (CommissionTier) {
+    return LibBaseVolStrike.getCommissionTier(user);
+  }
+
+  function getTierCommissionRate(CommissionTier tier) external view returns (uint256) {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    return bvs.tierCommissionRates[tier];
+  }
+
+  function getCommissionFeeForUser(address user) external view returns (uint256) {
+    return LibBaseVolStrike.getCommissionFeeForUser(user);
   }
 }

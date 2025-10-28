@@ -11,7 +11,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IPyth } from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
 import { PythLazer } from "../libraries/PythLazer.sol";
-import { PriceInfo } from "../types/Types.sol";
+import { PriceInfo, CommissionTier } from "../types/Types.sol";
 
 // It is expected that this contract is customized if you want to deploy your diamond
 // with data from a deployment script. Use the init function to initialize state variables

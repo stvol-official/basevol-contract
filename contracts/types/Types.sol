@@ -179,6 +179,11 @@ enum TimeUnit {
   DAY
 }
 
+enum CommissionTier {
+  NORMAL,
+  ATM_VAULT
+}
+
 struct Product {
   uint256 startTimestamp;
   TimeUnit timeUnit;
