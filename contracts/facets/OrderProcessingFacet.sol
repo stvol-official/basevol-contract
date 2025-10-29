@@ -137,7 +137,7 @@ contract OrderProcessingFacet is ReentrancyGuard {
     bool isUnderWin = strikePrice > round.endPrice[order.productId];
 
     if (order.overPrice + order.underPrice != 100) {
-      uint256 commissionRate = LibBaseVolStrike.getCommissionFeeForUser(order.overUser);
+      uint256 commissionRate = bvs.commissionfee;
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Invalid,
@@ -155,7 +155,7 @@ contract OrderProcessingFacet is ReentrancyGuard {
       ) *
         order.unit *
         PRICE_UNIT;
-      uint256 commissionRate = LibBaseVolStrike.getCommissionFeeForUser(order.overUser);
+      uint256 commissionRate = LibBaseVolStrike.getCommissionFeeForUser(order.underUser);
       uint256 fee = (loosePositionAmount * commissionRate) / BASE;
 
       bvs.settlementResults[order.idx] = SettlementResult({
@@ -171,6 +171,7 @@ contract OrderProcessingFacet is ReentrancyGuard {
       });
     } else if (isUnderWin) {
       uint256 amount = order.overPrice * order.unit * PRICE_UNIT;
+      // Under wins, so winner is underUser
       uint256 commissionRate = LibBaseVolStrike.getCommissionFeeForUser(order.underUser);
       uint256 fee = (amount * commissionRate) / BASE;
 
@@ -183,6 +184,7 @@ contract OrderProcessingFacet is ReentrancyGuard {
       });
     } else if (isOverWin) {
       uint256 amount = order.underPrice * order.unit * PRICE_UNIT;
+      // Over wins, so winner is overUser
       uint256 commissionRate = LibBaseVolStrike.getCommissionFeeForUser(order.overUser);
       uint256 fee = (amount * commissionRate) / BASE;
 
@@ -194,8 +196,8 @@ contract OrderProcessingFacet is ReentrancyGuard {
         fee: fee
       });
     } else {
-      // no one wins
-      uint256 commissionRate = LibBaseVolStrike.getCommissionFeeForUser(order.overUser);
+      // Tie case - no winner, use default commission fee
+      uint256 commissionRate = bvs.commissionfee;
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Tie,

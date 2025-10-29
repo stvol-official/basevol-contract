@@ -57,6 +57,7 @@ library LibBaseVolStrike {
     mapping(CommissionTier => uint256) tierCommissionRates; // Commission rate per tier
     mapping(address => CommissionTier) userTiers; // User's tier
     mapping(address => bool) userTierSet; // Whether user tier has been explicitly set
+    address[] usersWithTiers; // Array of users who have tiers set
 
     /* IMPROTANT: you can add new variables here */
   }
@@ -173,8 +174,8 @@ library LibBaseVolStrike {
         bvs.clearingHouse.userBalances(order.underUser),
         0
       );
-      // Use tier-based commission fee (use overUser's tier for Tie case)
-      uint256 commissionRate = getCommissionFeeForUser(order.overUser);
+      // Tie case has no winner, so use default commission fee
+      uint256 commissionRate = bvs.commissionfee;
 
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
@@ -205,8 +206,8 @@ library LibBaseVolStrike {
       ? order.overPrice * order.unit * PRICE_UNIT
       : order.underPrice * order.unit * PRICE_UNIT;
 
-    // Use tier-based commission fee
-    uint256 commissionRate = getCommissionFeeForUser(loser);
+    // Use tier-based commission fee - use winner's tier
+    uint256 commissionRate = getCommissionFeeForUser(winner);
     uint256 fee = (loserAmount * commissionRate) / BASE;
 
     _processWinSettlement(winner, loser, order, winnerAmount, loserAmount, fee, winPosition, bvs);
@@ -434,7 +435,7 @@ library LibBaseVolStrike {
     return CommissionTier.NORMAL;
   }
 
-  function getCommissionFeeForUser(address user) public view returns (uint256) {
+  function getCommissionFeeForUser(address user) internal view returns (uint256) {
     DiamondStorage storage bvs = diamondStorage();
     CommissionTier tier = getCommissionTier(user);
 
@@ -450,8 +451,13 @@ library LibBaseVolStrike {
     // NORMAL tier should not be explicitly set - it's the default
     if (tier == CommissionTier.NORMAL) {
       // Just remove any existing tier setting to revert to default
-      bvs.userTierSet[user] = false;
+      removeCommissionTier(user);
       return;
+    }
+
+    // Add to array if not already present
+    if (!bvs.userTierSet[user]) {
+      bvs.usersWithTiers.push(user);
     }
 
     bvs.userTiers[user] = tier;
@@ -460,6 +466,18 @@ library LibBaseVolStrike {
 
   function removeCommissionTier(address user) internal {
     DiamondStorage storage bvs = diamondStorage();
+
+    // Remove from array
+    uint256 length = bvs.usersWithTiers.length;
+    for (uint256 i = 0; i < length; i++) {
+      if (bvs.usersWithTiers[i] == user) {
+        // Move last element to this position and remove last
+        bvs.usersWithTiers[i] = bvs.usersWithTiers[length - 1];
+        bvs.usersWithTiers.pop();
+        break;
+      }
+    }
+
     bvs.userTierSet[user] = false;
   }
 

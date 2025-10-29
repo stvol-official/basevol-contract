@@ -222,3 +222,8 @@ struct PriceLazerData {
   bytes priceData;
   PriceFeedMapping[] mappings;
 }
+
+struct UserTierInfo {
+  address user;
+  CommissionTier tier;
+}
