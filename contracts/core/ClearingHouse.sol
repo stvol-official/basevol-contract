@@ -13,6 +13,7 @@ import { ICommonErrors } from "../errors/CommonErrors.sol";
 import { WithdrawalRequest, ForceWithdrawalRequest, Coupon, BatchWithdrawRequest, CouponUsageDetail, WinPosition, WithdrawalInfo, TimeUnit, Product, ProductInfo } from "../types/Types.sol";
 import { IClearingHouseErrors } from "../errors/ClearingHouseErrors.sol";
 import { IVaultManager } from "../interfaces/IVaultManager.sol";
+import { IGenesisVault } from "../interfaces/IGenesisVault.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
 contract ClearingHouse is
@@ -231,6 +232,20 @@ contract ClearingHouse is
     emit Withdraw(user, amount, $.userBalances[user]);
   }
 
+  function transferToGenesisVault(address user, uint256 amount) external nonReentrant onlyOperator {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    if (amount == 0) revert InvalidAmount();
+    if ($.genesisVault == address(0)) revert InvalidAddress();
+    if ($.userBalances[user] < amount) revert InsufficientBalance();
+
+    $.userBalances[user] -= amount;
+
+    $.token.safeTransfer($.genesisVault, amount);
+    IGenesisVault($.genesisVault).depositFromClearingHouse(amount, user);
+
+    emit BalanceTransferred(user, $.genesisVault, amount);
+  }
+
   function claimTreasury() external nonReentrant onlyAdmin {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     uint256 currentTreasuryAmount = $.treasuryAmount;
@@ -260,6 +275,12 @@ contract ClearingHouse is
     if (_vaultManager == address(0)) revert InvalidAddress();
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     $.vaultManager = IVaultManager(_vaultManager);
+  }
+
+  function setGenesisVault(address _genesisVault) external onlyAdmin {
+    if (_genesisVault == address(0)) revert InvalidAddress();
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    $.genesisVault = _genesisVault;
   }
 
   function setWithdrawalFee(uint256 newFee) external onlyAdmin {
@@ -417,6 +438,11 @@ contract ClearingHouse is
   function getToken() external view returns (address) {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
     return address($.token);
+  }
+
+  function getGenesisVault() external view returns (address) {
+    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
+    return $.genesisVault;
   }
 
   function getOperators() public view returns (address[] memory) {

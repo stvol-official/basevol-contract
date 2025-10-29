@@ -40,6 +40,7 @@ library ClearingHouseStorage {
     mapping(address => bool) baseVolManagers; // BaseVol managers
     address[] baseVolManagerList; // List of baseVol managers
     mapping(address => uint256) userEscrowBalances; // user => escrow balance
+    address genesisVault; // GenesisVault contract address for asset transfers
     /* IMPROTANT: you can add new variables here */
   }
 

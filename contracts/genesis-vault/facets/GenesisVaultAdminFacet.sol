@@ -31,6 +31,7 @@ contract GenesisVaultAdminFacet {
   event Paused(address indexed account);
   event Unpaused(address indexed account);
   event AdminSet(address indexed oldAdmin, address indexed newAdmin);
+  event ClearingHouseSet(address indexed clearingHouse);
 
   // Fee Configuration Events
   event ManagementFeeChanged(address account, uint256 newManagementFee);
@@ -154,6 +155,17 @@ contract GenesisVaultAdminFacet {
     address oldAdmin = s.admin;
     s.admin = _admin;
     emit AdminSet(oldAdmin, _admin);
+  }
+
+  /**
+   * @notice Set ClearingHouse contract address
+   * @param _clearingHouse ClearingHouse contract address
+   */
+  function setClearingHouse(address _clearingHouse) external onlyOwner {
+    if (_clearingHouse == address(0)) revert InvalidAddress();
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    s.clearingHouse = _clearingHouse;
+    emit ClearingHouseSet(_clearingHouse);
   }
 
   /**

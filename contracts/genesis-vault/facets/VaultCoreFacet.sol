@@ -110,28 +110,69 @@ contract VaultCoreFacet {
   ) external returns (uint256 requestId) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
 
-    require(assets > 0, "VaultCoreFacet: Zero assets");
-    require(!s.paused && !s.shutdown, "VaultCoreFacet: Vault not active");
-
     // ERC7540: owner MUST equal msg.sender unless owner has approved msg.sender as operator
     require(
       msg.sender == owner || s.operators[owner][msg.sender],
       "VaultCoreFacet: Not authorized"
     );
 
+    // Transfer assets to vault
+    s.asset.safeTransferFrom(owner, address(this), assets);
+
+    return _requestDepositInternal(assets, controller, owner, true);
+  }
+
+  /**
+   * @notice Deposit from ClearingHouse without entry fee
+   * @dev Only callable by ClearingHouse contract
+   * @param assets The amount of assets to deposit (already transferred)
+   * @param user The address of the user
+   * @return requestId The ID of the request (epoch number)
+   */
+  function depositFromClearingHouse(
+    uint256 assets,
+    address user
+  ) external returns (uint256 requestId) {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    require(msg.sender == s.clearingHouse, "VaultCoreFacet: Not authorized");
+
+    // Assets are already transferred by ClearingHouse
+    // controller and owner are both the user, no entry fee applied
+    return _requestDepositInternal(assets, user, user, false);
+  }
+
+  /**
+   * @notice Internal function to handle deposit request logic
+   * @param assets The amount of assets to deposit
+   * @param controller The address that will control the request
+   * @param owner The address that owns the assets
+   * @param applyFee Whether to apply entry fee
+   * @return requestId The ID of the request (epoch number)
+   */
+  function _requestDepositInternal(
+    uint256 assets,
+    address controller,
+    address owner,
+    bool applyFee
+  ) internal returns (uint256 requestId) {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+
+    require(assets > 0, "VaultCoreFacet: Zero assets");
+    require(!s.paused && !s.shutdown, "VaultCoreFacet: Vault not active");
+
     // Validate against deposit limits
     uint256 maxDepositAmount = LibGenesisVault.calculateMaxDepositRequest(owner);
     require(assets <= maxDepositAmount, "VaultCoreFacet: Deposit exceeds limit");
 
-    // Transfer assets to vault
-    s.asset.safeTransferFrom(owner, address(this), assets);
+    // Apply entry cost if required
+    uint256 netAssets = assets;
+    if (applyFee) {
+      uint256 entryCostAmount = s.entryCost;
+      netAssets = assets - entryCostAmount;
 
-    // Apply entry cost - only the net amount after fee goes to investment
-    uint256 entryCostAmount = s.entryCost;
-    uint256 netAssets = assets - entryCostAmount;
-
-    // Transfer entry cost immediately to fee recipient
-    LibGenesisVault.transferFeesToRecipient(entryCostAmount, "entry");
+      // Transfer entry cost immediately to fee recipient
+      LibGenesisVault.transferFeesToRecipient(entryCostAmount, "entry");
+    }
 
     // Get current epoch from BaseVol system
     uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();

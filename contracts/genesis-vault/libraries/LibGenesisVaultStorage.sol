@@ -96,6 +96,7 @@ library LibGenesisVaultStorage {
     uint256 vaultDepositLimit; // Maximum total deposits for vault
     bool shutdown; // Vault shutdown state
     bool paused; // Vault paused state
+    address clearingHouse; // ClearingHouse contract address authorized for direct deposits
 
     /* IMPORTANT: Add new variables here to maintain storage layout */
   }

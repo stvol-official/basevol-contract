@@ -69,6 +69,13 @@ contract GenesisVaultViewFacet {
     return LibGenesisVaultStorage.layout().strategy;
   }
 
+  /**
+   * @notice Get ClearingHouse contract address
+   */
+  function clearingHouse() external view returns (address) {
+    return LibGenesisVaultStorage.layout().clearingHouse;
+  }
+
   // ============ Fee View Functions ============
 
   /**
