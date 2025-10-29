@@ -159,32 +159,59 @@ contract AdminFacet {
   }
 
   // Tier management functions
+  function _validateTier(CommissionTier tier) internal pure {
+    if (uint256(tier) > uint256(CommissionTier.ATM_VAULT)) revert LibBaseVolStrike.InvalidTier();
+  }
+
   function setTierCommissionRate(CommissionTier tier, uint256 rate) external onlyOperator {
     if (rate > MAX_COMMISSION_FEE) revert LibBaseVolStrike.InvalidCommissionFee();
-
-    LibBaseVolStrike.setTierCommissionRate(tier, rate);
-
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    _validateTier(tier);
+    bvs.tierCommissionRates[tier] = rate;
     emit TierCommissionRateSet(tier, rate);
   }
 
   function setUserTier(address user, CommissionTier tier) external onlyOperator {
     if (user == address(0)) revert LibBaseVolStrike.InvalidAddress();
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    _validateTier(tier);
 
-    LibBaseVolStrike.setCommissionTier(user, tier);
+    if (!bvs.userTierSet[user]) {
+      bvs.usersWithTiers.push(user);
+    }
 
+    bvs.userTiers[user] = tier;
+    bvs.userTierSet[user] = true;
     emit UserTierSet(user, tier);
   }
 
   function removeUserTier(address user) external onlyOperator {
     if (user == address(0)) revert LibBaseVolStrike.InvalidAddress();
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
 
-    LibBaseVolStrike.removeCommissionTier(user);
+    uint256 length = bvs.usersWithTiers.length;
+    for (uint256 i = 0; i < length; i++) {
+      if (bvs.usersWithTiers[i] == user) {
+        // Move last element to this position and remove last
+        bvs.usersWithTiers[i] = bvs.usersWithTiers[length - 1];
+        bvs.usersWithTiers.pop();
+        break;
+      }
+    }
 
+    bvs.userTierSet[user] = false;
     emit UserTierRemoved(user);
   }
 
-  function getUserTier(address user) external view returns (CommissionTier) {
-    return LibBaseVolStrike.getCommissionTier(user);
+  function resetAllUserTiers() external onlyOperator {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    uint256 length = bvs.usersWithTiers.length;
+    for (uint256 i = 0; i < length; i++) {
+      address user = bvs.usersWithTiers[i];
+      delete bvs.userTiers[user];
+      bvs.userTierSet[user] = false;
+    }
+    delete bvs.usersWithTiers;
   }
 
   function getTierCommissionRate(CommissionTier tier) external view returns (uint256) {
@@ -207,10 +234,5 @@ contract AdminFacet {
     }
 
     return result;
-  }
-
-  function getUsersWithTiersCount() external view returns (uint256) {
-    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    return bvs.usersWithTiers.length;
   }
 }

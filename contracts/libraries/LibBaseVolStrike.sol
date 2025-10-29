@@ -415,6 +415,7 @@ library LibBaseVolStrike {
   error EpochHasNotStartedYet();
   error InsufficientVerificationFee();
   error InvalidChannel();
+  error InvalidTier();
 
   // Specific errors for redeemPairs debugging
   error InvalidOverUnitsSum();
@@ -423,67 +424,17 @@ library LibBaseVolStrike {
   error InsufficientUnderRedeemable();
   error CommissionExceedsRedemption();
 
-  // Tier-based commission helper functions
-  function getCommissionTier(address user) internal view returns (CommissionTier) {
-    DiamondStorage storage bvs = diamondStorage();
-
-    if (bvs.userTierSet[user]) {
-      return bvs.userTiers[user];
-    }
-
-    // Always use NORMAL as default
-    return CommissionTier.NORMAL;
-  }
-
   function getCommissionFeeForUser(address user) internal view returns (uint256) {
     DiamondStorage storage bvs = diamondStorage();
-    CommissionTier tier = getCommissionTier(user);
 
-    // If tier rate is not set, fallback to legacy commissionfee
+    // If user has no tier set, use legacy commissionfee
+    if (!bvs.userTierSet[user]) {
+      return bvs.commissionfee;
+    }
+
+    CommissionTier tier = bvs.userTiers[user];
     uint256 tierRate = bvs.tierCommissionRates[tier];
     return tierRate > 0 ? tierRate : bvs.commissionfee;
-  }
-
-  function setCommissionTier(address user, CommissionTier tier) internal {
-    DiamondStorage storage bvs = diamondStorage();
-    if (user == address(0)) revert InvalidAddress();
-
-    // NORMAL tier should not be explicitly set - it's the default
-    if (tier == CommissionTier.NORMAL) {
-      // Just remove any existing tier setting to revert to default
-      removeCommissionTier(user);
-      return;
-    }
-
-    // Add to array if not already present
-    if (!bvs.userTierSet[user]) {
-      bvs.usersWithTiers.push(user);
-    }
-
-    bvs.userTiers[user] = tier;
-    bvs.userTierSet[user] = true;
-  }
-
-  function removeCommissionTier(address user) internal {
-    DiamondStorage storage bvs = diamondStorage();
-
-    // Remove from array
-    uint256 length = bvs.usersWithTiers.length;
-    for (uint256 i = 0; i < length; i++) {
-      if (bvs.usersWithTiers[i] == user) {
-        // Move last element to this position and remove last
-        bvs.usersWithTiers[i] = bvs.usersWithTiers[length - 1];
-        bvs.usersWithTiers.pop();
-        break;
-      }
-    }
-
-    bvs.userTierSet[user] = false;
-  }
-
-  function setTierCommissionRate(CommissionTier tier, uint256 rate) internal {
-    DiamondStorage storage bvs = diamondStorage();
-    bvs.tierCommissionRates[tier] = rate;
   }
 
   // Access control modifiers

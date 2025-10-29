@@ -180,8 +180,7 @@ enum TimeUnit {
 }
 
 enum CommissionTier {
-  NORMAL,
-  ATM_VAULT
+  ATM_VAULT // IMPORTANT: Must be included in LibBaseVolStrike._validateTier
 }
 
 struct Product {
