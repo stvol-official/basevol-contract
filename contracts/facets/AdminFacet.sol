@@ -3,7 +3,7 @@ pragma solidity ^0.8.4;
 
 import { LibBaseVolStrike } from "../libraries/LibBaseVolStrike.sol";
 import { LibDiamond } from "../libraries/LibDiamond.sol";
-import { PriceInfo } from "../types/Types.sol";
+import { PriceInfo, CommissionTier, UserTierInfo } from "../types/Types.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IPyth } from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
@@ -16,6 +16,9 @@ contract AdminFacet {
   uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
 
   event PriceIdAdded(uint256 indexed productId, bytes32 priceId, string symbol);
+  event TierCommissionRateSet(CommissionTier indexed tier, uint256 rate);
+  event UserTierSet(address indexed user, CommissionTier tier);
+  event UserTierRemoved(address indexed user);
 
   modifier onlyOwner() {
     LibDiamond.enforceIsContractOwner();
@@ -153,5 +156,83 @@ contract AdminFacet {
     bvs.priceIdCount++;
 
     emit PriceIdAdded(_productId, _priceId, _symbol);
+  }
+
+  // Tier management functions
+  function _validateTier(CommissionTier tier) internal pure {
+    if (uint256(tier) > uint256(CommissionTier.ATM_VAULT)) revert LibBaseVolStrike.InvalidTier();
+  }
+
+  function setTierCommissionRate(CommissionTier tier, uint256 rate) external onlyOperator {
+    if (rate > MAX_COMMISSION_FEE) revert LibBaseVolStrike.InvalidCommissionFee();
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    _validateTier(tier);
+    bvs.tierCommissionRates[tier] = rate;
+    emit TierCommissionRateSet(tier, rate);
+  }
+
+  function setUserTier(address user, CommissionTier tier) external onlyOperator {
+    if (user == address(0)) revert LibBaseVolStrike.InvalidAddress();
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    _validateTier(tier);
+
+    if (!bvs.userTierSet[user]) {
+      bvs.usersWithTiers.push(user);
+    }
+
+    bvs.userTiers[user] = tier;
+    bvs.userTierSet[user] = true;
+    emit UserTierSet(user, tier);
+  }
+
+  function removeUserTier(address user) external onlyOperator {
+    if (user == address(0)) revert LibBaseVolStrike.InvalidAddress();
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+
+    uint256 length = bvs.usersWithTiers.length;
+    for (uint256 i = 0; i < length; i++) {
+      if (bvs.usersWithTiers[i] == user) {
+        // Move last element to this position and remove last
+        bvs.usersWithTiers[i] = bvs.usersWithTiers[length - 1];
+        bvs.usersWithTiers.pop();
+        break;
+      }
+    }
+
+    bvs.userTierSet[user] = false;
+    emit UserTierRemoved(user);
+  }
+
+  function resetAllUserTiers() external onlyOperator {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    uint256 length = bvs.usersWithTiers.length;
+    for (uint256 i = 0; i < length; i++) {
+      address user = bvs.usersWithTiers[i];
+      delete bvs.userTiers[user];
+      bvs.userTierSet[user] = false;
+    }
+    delete bvs.usersWithTiers;
+  }
+
+  function getTierCommissionRate(CommissionTier tier) external view returns (uint256) {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    return bvs.tierCommissionRates[tier];
+  }
+
+  function getCommissionFeeForUser(address user) external view returns (uint256) {
+    return LibBaseVolStrike.getCommissionFeeForUser(user);
+  }
+
+  function getAllUsersWithTiers() external view returns (UserTierInfo[] memory) {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    uint256 length = bvs.usersWithTiers.length;
+    UserTierInfo[] memory result = new UserTierInfo[](length);
+
+    for (uint256 i = 0; i < length; i++) {
+      address user = bvs.usersWithTiers[i];
+      result[i] = UserTierInfo({ user: user, tier: bvs.userTiers[user] });
+    }
+
+    return result;
   }
 }

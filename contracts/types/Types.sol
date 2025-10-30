@@ -179,6 +179,10 @@ enum TimeUnit {
   DAY
 }
 
+enum CommissionTier {
+  ATM_VAULT // IMPORTANT: Must be included in LibBaseVolStrike._validateTier
+}
+
 struct Product {
   uint256 startTimestamp;
   TimeUnit timeUnit;
@@ -216,4 +220,9 @@ struct PriceFeedMapping {
 struct PriceLazerData {
   bytes priceData;
   PriceFeedMapping[] mappings;
+}
+
+struct UserTierInfo {
+  address user;
+  CommissionTier tier;
 }

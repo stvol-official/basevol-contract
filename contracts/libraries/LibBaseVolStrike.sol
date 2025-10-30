@@ -5,11 +5,18 @@ import "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IVaultManager } from "../interfaces/IVaultManager.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
-import { Round, FilledOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo, RedeemRequest, TargetRedeemOrder, Position, PriceUpdateData, PriceData, WinPosition } from "../types/Types.sol";
+import { Round, FilledOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo, RedeemRequest, TargetRedeemOrder, Position, PriceUpdateData, PriceData, WinPosition, CommissionTier } from "../types/Types.sol";
 import { PythLazer } from "../libraries/PythLazer.sol";
 
 library LibBaseVolStrike {
-  bytes32 constant DIAMOND_STORAGE_POSITION = keccak256("basevol.diamond.storage.secure");
+  function _getStoragePosition() internal view returns (bytes32) {
+    uint256 chainId = block.chainid;
+    if (chainId == 8453) {
+      return keccak256("basevol.diamond.storage.secure");
+    } else {
+      return keccak256("basevol.diamond.storage");
+    }
+  }
 
   uint256 private constant PRICE_UNIT = 1e6;
   uint256 private constant BASE = 10000; // 100%
@@ -46,11 +53,17 @@ library LibBaseVolStrike {
     uint256 startTimestamp; // Contract start timestamp
     uint256 intervalSeconds; // Round interval in seconds
     PythLazer pythLazer;
+    // Tier-based commission system
+    mapping(CommissionTier => uint256) tierCommissionRates; // Commission rate per tier
+    mapping(address => CommissionTier) userTiers; // User's tier
+    mapping(address => bool) userTierSet; // Whether user tier has been explicitly set
+    address[] usersWithTiers; // Array of users who have tiers set
+
     /* IMPROTANT: you can add new variables here */
   }
 
-  function diamondStorage() internal pure returns (DiamondStorage storage ds) {
-    bytes32 position = DIAMOND_STORAGE_POSITION;
+  function diamondStorage() internal view returns (DiamondStorage storage ds) {
+    bytes32 position = _getStoragePosition();
     assembly {
       ds.slot := position
     }
@@ -161,11 +174,14 @@ library LibBaseVolStrike {
         bvs.clearingHouse.userBalances(order.underUser),
         0
       );
+      // Tie case has no winner, so use default commission fee
+      uint256 commissionRate = bvs.commissionfee;
+
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Tie,
         winAmount: 0,
-        feeRate: bvs.commissionfee,
+        feeRate: commissionRate,
         fee: 0
       });
     }
@@ -189,7 +205,10 @@ library LibBaseVolStrike {
     uint256 loserAmount = order.overUser == loser
       ? order.overPrice * order.unit * PRICE_UNIT
       : order.underPrice * order.unit * PRICE_UNIT;
-    uint256 fee = (loserAmount * bvs.commissionfee) / BASE;
+
+    // Use tier-based commission fee - use winner's tier
+    uint256 commissionRate = getCommissionFeeForUser(winner);
+    uint256 fee = (loserAmount * commissionRate) / BASE;
 
     _processWinSettlement(winner, loser, order, winnerAmount, loserAmount, fee, winPosition, bvs);
 
@@ -197,7 +216,7 @@ library LibBaseVolStrike {
       idx: order.idx,
       winPosition: winPosition,
       winAmount: loserAmount,
-      feeRate: bvs.commissionfee,
+      feeRate: commissionRate,
       fee: fee
     });
 
@@ -396,6 +415,7 @@ library LibBaseVolStrike {
   error EpochHasNotStartedYet();
   error InsufficientVerificationFee();
   error InvalidChannel();
+  error InvalidTier();
 
   // Specific errors for redeemPairs debugging
   error InvalidOverUnitsSum();
@@ -403,6 +423,19 @@ library LibBaseVolStrike {
   error InsufficientOverRedeemable();
   error InsufficientUnderRedeemable();
   error CommissionExceedsRedemption();
+
+  function getCommissionFeeForUser(address user) internal view returns (uint256) {
+    DiamondStorage storage bvs = diamondStorage();
+
+    // If user has no tier set, use legacy commissionfee
+    if (!bvs.userTierSet[user]) {
+      return bvs.commissionfee;
+    }
+
+    CommissionTier tier = bvs.userTiers[user];
+    uint256 tierRate = bvs.tierCommissionRates[tier];
+    return tierRate > 0 ? tierRate : bvs.commissionfee;
+  }
 
   // Access control modifiers
   modifier onlyAdmin() {

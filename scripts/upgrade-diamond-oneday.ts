@@ -11,7 +11,7 @@ const NETWORK = ["base_sepolia", "base"] as const;
 type SupportedNetwork = (typeof NETWORK)[number];
 
 const DIAMOND_ADDRESSES = {
-  base_sepolia: "0x5382787eb91D48E934044c2D67B6A1A1381053a8", // Update after deployment
+  base_sepolia: "0x66ee6506eD99859d340690d98a92db239909DF89", // Update after deployment
   base: "0x5B2eA3A959b525f95F80F29C0C52Cd9cC925DB74", // Update after deployment
 };
 
@@ -64,6 +64,7 @@ interface FacetCut {
 
 interface FacetAnalysis {
   name: string;
+  path: string; // Add path to interface
   newSelectors: string[]; // Newly added functions
   existingSelectors: string[]; // Existing functions
   removedSelectors: string[]; // Removed functions
@@ -100,25 +101,28 @@ async function analyzeFacet(
 
   let FacetFactory;
   if (needsPythLazerLib && pythLazerLibAddress) {
-    FacetFactory = await ethers.getContractFactory(facetInfo.name, {
+    FacetFactory = await ethers.getContractFactory(facetInfo.path, {
       libraries: {
         PythLazerLib: pythLazerLibAddress,
       },
     });
   } else {
-    FacetFactory = await ethers.getContractFactory(facetInfo.name);
+    FacetFactory = await ethers.getContractFactory(facetInfo.path);
   }
 
   const newFacet = await FacetFactory.deploy();
   await newFacet.waitForDeployment();
   const newFacetAddress = await newFacet.getAddress();
 
-  const newSelectors = getSelectors(await ethers.getContractAt(facetInfo.name, newFacetAddress));
+  const newSelectors = getSelectors(await ethers.getContractAt(facetInfo.path, newFacetAddress));
 
   console.log(`📦 New ${facetInfo.name} deployed to: ${newFacetAddress}`);
   console.log(`🔢 New selectors (${newSelectors.length}): ${newSelectors.join(", ")}`);
 
-  const diamondLoupe = await ethers.getContractAt("IDiamondLoupe", diamondAddress);
+  const diamondLoupe = await ethers.getContractAt(
+    "contracts/interfaces/IDiamondLoupe.sol:IDiamondLoupe",
+    diamondAddress,
+  );
   const currentFacets = await diamondLoupe.facets();
 
   const existingSelectorsFromThisFacet: string[] = [];
@@ -168,6 +172,7 @@ async function analyzeFacet(
 
   return {
     name: facetInfo.name,
+    path: facetInfo.path,
     newFacetAddress,
     newSelectors: newSelectorsToAdd,
     existingSelectors: existingSelectorsFromThisFacet,
@@ -472,7 +477,10 @@ const main = async () => {
       );
     });
 
-    const diamondCut = await ethers.getContractAt("IDiamondCut", DIAMOND_ADDRESS);
+    const diamondCut = await ethers.getContractAt(
+      "contracts/interfaces/IDiamondCut.sol:IDiamondCut",
+      DIAMOND_ADDRESS,
+    );
 
     const tx = await diamondCut.diamondCut(totalCuts, ethers.ZeroAddress, "0x");
     console.log("Diamond cut tx:", tx.hash);
@@ -485,7 +493,10 @@ const main = async () => {
     console.log("✅ Diamond cut completed successfully!");
 
     console.log("\n🔍 Verifying upgrades...");
-    const diamondLoupe = await ethers.getContractAt("IDiamondLoupe", DIAMOND_ADDRESS);
+    const diamondLoupe = await ethers.getContractAt(
+      "contracts/interfaces/IDiamondLoupe.sol:IDiamondLoupe",
+      DIAMOND_ADDRESS,
+    );
 
     const maxRetries = 3;
     const retryDelay = 5000; // 5 seconds
@@ -554,7 +565,7 @@ const main = async () => {
 
       console.log(`Testing ${analysis.name}...`);
       try {
-        const facetContract = await ethers.getContractAt(analysis.name, DIAMOND_ADDRESS);
+        const facetContract = await ethers.getContractAt(analysis.path, DIAMOND_ADDRESS);
         console.log(`✅ ${analysis.name} functions are accessible`);
       } catch (error) {
         console.log(`⚠️  Could not test ${analysis.name} functions:`, error);

@@ -137,11 +137,12 @@ contract OrderProcessingFacet is ReentrancyGuard {
     bool isUnderWin = strikePrice > round.endPrice[order.productId];
 
     if (order.overPrice + order.underPrice != 100) {
+      uint256 commissionRate = bvs.commissionfee;
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Invalid,
         winAmount: 0,
-        feeRate: bvs.commissionfee,
+        feeRate: commissionRate,
         fee: 0
       });
     } else if (order.overUser == order.underUser) {
@@ -154,7 +155,8 @@ contract OrderProcessingFacet is ReentrancyGuard {
       ) *
         order.unit *
         PRICE_UNIT;
-      uint256 fee = (loosePositionAmount * bvs.commissionfee) / BASE;
+      uint256 commissionRate = LibBaseVolStrike.getCommissionFeeForUser(order.underUser);
+      uint256 fee = (loosePositionAmount * commissionRate) / BASE;
 
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
@@ -164,38 +166,43 @@ contract OrderProcessingFacet is ReentrancyGuard {
             ? WinPosition.Under
             : WinPosition.Tie,
         winAmount: loosePositionAmount,
-        feeRate: bvs.commissionfee,
+        feeRate: commissionRate,
         fee: fee
       });
     } else if (isUnderWin) {
       uint256 amount = order.overPrice * order.unit * PRICE_UNIT;
-      uint256 fee = (amount * bvs.commissionfee) / BASE;
+      // Under wins, so winner is underUser
+      uint256 commissionRate = LibBaseVolStrike.getCommissionFeeForUser(order.underUser);
+      uint256 fee = (amount * commissionRate) / BASE;
 
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Under,
         winAmount: amount,
-        feeRate: bvs.commissionfee,
+        feeRate: commissionRate,
         fee: fee
       });
     } else if (isOverWin) {
       uint256 amount = order.underPrice * order.unit * PRICE_UNIT;
-      uint256 fee = (amount * bvs.commissionfee) / BASE;
+      // Over wins, so winner is overUser
+      uint256 commissionRate = LibBaseVolStrike.getCommissionFeeForUser(order.overUser);
+      uint256 fee = (amount * commissionRate) / BASE;
 
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Over,
         winAmount: amount,
-        feeRate: bvs.commissionfee,
+        feeRate: commissionRate,
         fee: fee
       });
     } else {
-      // no one wins
+      // Tie case - no winner, use default commission fee
+      uint256 commissionRate = bvs.commissionfee;
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Tie,
         winAmount: 0,
-        feeRate: bvs.commissionfee,
+        feeRate: commissionRate,
         fee: 0
       });
     }
