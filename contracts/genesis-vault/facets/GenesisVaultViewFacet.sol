@@ -402,22 +402,18 @@ contract GenesisVaultViewFacet {
 
   /**
    * @notice Calculate claimable deposit assets across epochs
-   * @dev Only checks last 50 epochs from current epoch for consistency
+   * @dev Checks all user's deposit epochs (no time-based limit to prevent asset loss)
    */
   function _calculateClaimableDepositAssetsAcrossEpochs(
     address controller
   ) internal view returns (uint256) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
     uint256 total = 0;
 
     uint256[] memory userEpochs = s.userDepositEpochs[controller];
 
     for (uint256 i = 0; i < userEpochs.length; i++) {
       uint256 epoch = userEpochs[i];
-
-      // Only check epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
 
       if (s.roundData[epoch].isSettled) {
         uint256 depositedAssets = s.userEpochDepositAssets[controller][epoch];
@@ -431,22 +427,18 @@ contract GenesisVaultViewFacet {
 
   /**
    * @notice Calculate claimable redeem shares across epochs
-   * @dev Only checks last 50 epochs from current epoch for consistency
+   * @dev Checks all user's redeem epochs (no time-based limit to prevent asset loss)
    */
   function _calculateClaimableRedeemSharesAcrossEpochs(
     address controller
   ) internal view returns (uint256) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
     uint256 total = 0;
 
     uint256[] memory userEpochs = s.userRedeemEpochs[controller];
 
     for (uint256 i = 0; i < userEpochs.length; i++) {
       uint256 epoch = userEpochs[i];
-
-      // Only check epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
 
       if (s.roundData[epoch].isSettled) {
         uint256 redeemedShares = s.userEpochRedeemShares[controller][epoch];
@@ -460,22 +452,18 @@ contract GenesisVaultViewFacet {
 
   /**
    * @notice Calculate claimable redeem assets across epochs
-   * @dev Only checks last 50 epochs from current epoch for consistency
+   * @dev Checks all user's redeem epochs (no time-based limit to prevent asset loss)
    */
   function _calculateClaimableRedeemAssetsAcrossEpochs(
     address controller
   ) internal view returns (uint256) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
     uint256 total = 0;
 
     uint256[] memory userEpochs = s.userRedeemEpochs[controller];
 
     for (uint256 i = 0; i < userEpochs.length; i++) {
       uint256 epoch = userEpochs[i];
-
-      // Only check epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
 
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
       if (roundData.isSettled) {
@@ -491,14 +479,13 @@ contract GenesisVaultViewFacet {
 
   /**
    * @notice Calculate claimable shares from assets (for maxMint)
-   * @dev Only checks last 50 epochs from current epoch for consistency
+   * @dev Checks all user's deposit epochs (no time-based limit to prevent asset loss)
    */
   function _calculateClaimableSharesFromAssets(
     address controller,
     uint256 claimableAssets
   ) internal view returns (uint256) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
     uint256 totalShares = 0;
     uint256 remainingAssets = claimableAssets;
 
@@ -506,9 +493,6 @@ contract GenesisVaultViewFacet {
 
     for (uint256 i = 0; i < userEpochs.length && remainingAssets > 0; i++) {
       uint256 epoch = userEpochs[i];
-
-      // Only check epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
 
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 

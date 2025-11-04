@@ -358,6 +358,7 @@ contract VaultCoreFacet {
   /**
    * @notice ERC7540 deposit (claim from async request)
    * @dev Epoch-based with automatic FIFO processing
+   * @dev Processes up to 50 epochs per call to prevent gas issues
    * @param assets The amount of assets to claim
    * @param receiver The address to receive the shares
    * @param controller The address that controls the request
@@ -370,21 +371,20 @@ contract VaultCoreFacet {
   ) external onlyControllerOrOperator(controller) returns (uint256 shares) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
 
-    // Epoch-based: Calculate total claimable across last 50 epochs from current epoch
+    // Epoch-based: Calculate total claimable across user's epochs
     uint256 totalClaimable = _calculateClaimableDepositAssetsAcrossEpochs(controller);
     require(totalClaimable >= assets, "VaultCoreFacet: Insufficient claimable assets");
 
     // Process claims from oldest to newest epochs (FIFO)
+    // Only process up to 50 epochs per call for gas efficiency
     uint256 remainingAssets = assets;
     uint256 totalShares = 0;
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
 
     uint256[] memory userEpochs = s.userDepositEpochs[controller];
-    for (uint256 i = 0; i < userEpochs.length && remainingAssets > 0; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
 
-      // Only process epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
+    for (uint256 i = 0; i < epochsToCheck && remainingAssets > 0; i++) {
+      uint256 epoch = userEpochs[i];
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -408,6 +408,17 @@ contract VaultCoreFacet {
         s.userEpochClaimedDepositAssets[controller][epoch] += assetsToProcess;
 
         remainingAssets -= assetsToProcess;
+
+        // If this epoch is fully claimed, remove it from the list
+        if (
+          s.userEpochDepositAssets[controller][epoch] ==
+          s.userEpochClaimedDepositAssets[controller][epoch]
+        ) {
+          _removeEpochFromUserDepositList(controller, i);
+          // Adjust index and epochsToCheck since we removed an element
+          i--;
+          epochsToCheck--;
+        }
       }
     }
 
@@ -422,6 +433,7 @@ contract VaultCoreFacet {
   /**
    * @notice ERC7540 mint (claim from async request)
    * @dev Epoch-based with automatic FIFO processing
+   * @dev Processes up to 50 epochs per call to prevent gas issues
    * @param shares The amount of shares to claim
    * @param receiver The address to receive the shares
    * @param controller The address that controls the request
@@ -435,16 +447,15 @@ contract VaultCoreFacet {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
 
     // Process claims from oldest to newest epochs to get the required shares
+    // Only process up to 50 epochs per call for gas efficiency
     uint256 remainingShares = shares;
     uint256 totalAssetsUsed = 0;
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
 
     uint256[] memory userEpochs = s.userDepositEpochs[controller];
-    for (uint256 i = 0; i < userEpochs.length && remainingShares > 0; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
 
-      // Only process epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
+    for (uint256 i = 0; i < epochsToCheck && remainingShares > 0; i++) {
+      uint256 epoch = userEpochs[i];
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -471,6 +482,17 @@ contract VaultCoreFacet {
         s.userEpochClaimedDepositAssets[controller][epoch] += assetsNeeded;
 
         remainingShares -= sharesToProcess;
+
+        // If this epoch is fully claimed, remove it from the list
+        if (
+          s.userEpochDepositAssets[controller][epoch] ==
+          s.userEpochClaimedDepositAssets[controller][epoch]
+        ) {
+          _removeEpochFromUserDepositList(controller, i);
+          // Adjust index and epochsToCheck since we removed an element
+          i--;
+          epochsToCheck--;
+        }
       }
     }
 
@@ -488,6 +510,7 @@ contract VaultCoreFacet {
 
   /**
    * @notice ERC7540 withdraw with Epoch-based calculation
+   * @dev Processes up to 50 epochs per call to prevent gas issues
    * @param assets The amount of assets to withdraw
    * @param receiver The address to receive the assets
    * @param controller The address that controls the request
@@ -504,22 +527,21 @@ contract VaultCoreFacet {
     uint256 exitCostAmount = s.exitCost;
     uint256 grossAssetsNeeded = assets + exitCostAmount;
 
-    // Epoch-based: Calculate total claimable across last 50 epochs from current epoch
+    // Epoch-based: Calculate total claimable across user's epochs
     uint256 totalClaimable = _calculateClaimableRedeemAssetsAcrossEpochs(controller);
     require(totalClaimable >= grossAssetsNeeded, "VaultCoreFacet: Insufficient claimable assets");
 
     // Process claims from oldest to newest epochs (FIFO)
+    // Only process up to 50 epochs per call for gas efficiency
     uint256 remainingGrossAssets = grossAssetsNeeded;
     uint256 totalShares = 0;
     uint256 totalPerformanceFees = 0;
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
 
     uint256[] memory userEpochs = s.userRedeemEpochs[controller];
-    for (uint256 i = 0; i < userEpochs.length && remainingGrossAssets > 0; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
 
-      // Only process epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
+    for (uint256 i = 0; i < epochsToCheck && remainingGrossAssets > 0; i++) {
+      uint256 epoch = userEpochs[i];
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -555,6 +577,17 @@ contract VaultCoreFacet {
         s.userEpochClaimedRedeemShares[controller][epoch] += epochSharesNeeded;
 
         remainingGrossAssets -= assetsToProcess;
+
+        // If this epoch is fully claimed, remove it from the list
+        if (
+          s.userEpochRedeemShares[controller][epoch] ==
+          s.userEpochClaimedRedeemShares[controller][epoch]
+        ) {
+          _removeEpochFromUserRedeemList(controller, i);
+          // Adjust index and epochsToCheck since we removed an element
+          i--;
+          epochsToCheck--;
+        }
       }
     }
 
@@ -579,6 +612,7 @@ contract VaultCoreFacet {
 
   /**
    * @notice ERC7540 redeem with Epoch-based calculation
+   * @dev Processes up to 50 epochs per call to prevent gas issues
    * @param shares The amount of shares to redeem
    * @param receiver The address to receive the assets
    * @param controller The address that controls the request
@@ -596,17 +630,16 @@ contract VaultCoreFacet {
     require(totalClaimableShares >= shares, "VaultCoreFacet: Insufficient claimable shares");
 
     // Process claims from oldest to newest epochs (FIFO)
+    // Only process up to 50 epochs per call for gas efficiency
     uint256 remainingShares = shares;
     uint256 totalAssetsBeforeFees = 0;
     uint256 totalPerformanceFees = 0;
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
 
     uint256[] memory userEpochs = s.userRedeemEpochs[controller];
-    for (uint256 i = 0; i < userEpochs.length && remainingShares > 0; i++) {
-      uint256 epoch = userEpochs[i];
+    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
 
-      // Only process epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
+    for (uint256 i = 0; i < epochsToCheck && remainingShares > 0; i++) {
+      uint256 epoch = userEpochs[i];
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -638,6 +671,17 @@ contract VaultCoreFacet {
         s.userEpochClaimedRedeemShares[controller][epoch] += sharesToProcess;
 
         remainingShares -= sharesToProcess;
+
+        // If this epoch is fully claimed, remove it from the list
+        if (
+          s.userEpochRedeemShares[controller][epoch] ==
+          s.userEpochClaimedRedeemShares[controller][epoch]
+        ) {
+          _removeEpochFromUserRedeemList(controller, i);
+          // Adjust index and epochsToCheck since we removed an element
+          i--;
+          epochsToCheck--;
+        }
       }
     }
 
@@ -678,22 +722,18 @@ contract VaultCoreFacet {
 
   /**
    * @notice Calculate total claimable deposit assets across epochs
-   * @dev Only checks last 50 epochs from current epoch for consistency
+   * @dev Checks all user's deposit epochs (no time-based limit to prevent asset loss)
    */
   function _calculateClaimableDepositAssetsAcrossEpochs(
     address user
   ) internal view returns (uint256) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
     uint256 total = 0;
 
     uint256[] memory userEpochs = s.userDepositEpochs[user];
 
     for (uint256 i = 0; i < userEpochs.length; i++) {
       uint256 epoch = userEpochs[i];
-
-      // Only check epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
 
       if (s.roundData[epoch].isSettled) {
         total += LibGenesisVault.calculateClaimableForEpoch(user, epoch, true);
@@ -705,22 +745,18 @@ contract VaultCoreFacet {
 
   /**
    * @notice Calculate total claimable redeem shares across epochs
-   * @dev Only checks last 50 epochs from current epoch for consistency
+   * @dev Checks all user's redeem epochs (no time-based limit to prevent asset loss)
    */
   function _calculateClaimableRedeemSharesAcrossEpochs(
     address user
   ) internal view returns (uint256) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
     uint256 total = 0;
 
     uint256[] memory userEpochs = s.userRedeemEpochs[user];
 
     for (uint256 i = 0; i < userEpochs.length; i++) {
       uint256 epoch = userEpochs[i];
-
-      // Only check epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
 
       if (s.roundData[epoch].isSettled) {
         total += LibGenesisVault.calculateClaimableForEpoch(user, epoch, false);
@@ -732,22 +768,18 @@ contract VaultCoreFacet {
 
   /**
    * @notice Calculate total claimable redeem assets across epochs
-   * @dev Only checks last 50 epochs from current epoch for consistency
+   * @dev Checks all user's redeem epochs (no time-based limit to prevent asset loss)
    */
   function _calculateClaimableRedeemAssetsAcrossEpochs(
     address user
   ) internal view returns (uint256) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    uint256 currentEpoch = LibGenesisVault.getCurrentEpoch();
     uint256 total = 0;
 
     uint256[] memory userEpochs = s.userRedeemEpochs[user];
 
     for (uint256 i = 0; i < userEpochs.length; i++) {
       uint256 epoch = userEpochs[i];
-
-      // Only check epochs within last 50 epochs from current epoch
-      if (epoch + 50 <= currentEpoch) continue;
 
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
       if (roundData.isSettled) {
@@ -866,5 +898,39 @@ contract VaultCoreFacet {
     }
 
     users.push(user);
+  }
+
+  /**
+   * @notice Remove epoch from user's deposit epoch list
+   * @dev Uses swap-and-pop for gas efficiency
+   * @param user The user address
+   * @param index The index of the epoch to remove
+   */
+  function _removeEpochFromUserDepositList(address user, uint256 index) internal {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    uint256[] storage epochs = s.userDepositEpochs[user];
+
+    require(index < epochs.length, "VaultCoreFacet: Invalid index");
+
+    // Swap with last element and pop
+    epochs[index] = epochs[epochs.length - 1];
+    epochs.pop();
+  }
+
+  /**
+   * @notice Remove epoch from user's redeem epoch list
+   * @dev Uses swap-and-pop for gas efficiency
+   * @param user The user address
+   * @param index The index of the epoch to remove
+   */
+  function _removeEpochFromUserRedeemList(address user, uint256 index) internal {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    uint256[] storage epochs = s.userRedeemEpochs[user];
+
+    require(index < epochs.length, "VaultCoreFacet: Invalid index");
+
+    // Swap with last element and pop
+    epochs[index] = epochs[epochs.length - 1];
+    epochs.pop();
   }
 }
