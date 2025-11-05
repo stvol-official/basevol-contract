@@ -161,14 +161,6 @@ contract ClearingHouse is
     emit Deposit(msg.sender, msg.sender, amount, $.userBalances[msg.sender]);
   }
 
-  function depositTo(address user, uint256 amount) external nonReentrant {
-    ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
-
-    $.token.safeTransferFrom(msg.sender, address(this), amount);
-    $.userBalances[user] += amount;
-    emit Deposit(user, msg.sender, amount, $.userBalances[user]);
-  }
-
   function transferBalance(
     address from,
     address to,
