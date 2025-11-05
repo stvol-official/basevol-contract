@@ -3,7 +3,13 @@ pragma solidity ^0.8.4;
 
 import { LibBaseVolStrike } from "../libraries/LibBaseVolStrike.sol";
 import { LibDiamond } from "../libraries/LibDiamond.sol";
-import { RedeemRequest, TargetRedeemOrder, FilledOrder, Position, RedeemPairs } from "../types/Types.sol";
+import {
+  RedeemRequest,
+  TargetRedeemOrder,
+  FilledOrder,
+  Position,
+  RedeemPairs
+} from "../types/Types.sol";
 
 contract RedemptionFacet {
   using LibBaseVolStrike for LibBaseVolStrike.DiamondStorage;
@@ -213,6 +219,7 @@ contract RedemptionFacet {
   }
 
   function setRedeemVault(address _redeemVault) external onlyAdmin {
+    if (_redeemVault == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     bvs.redeemVault = _redeemVault;
   }

@@ -253,6 +253,7 @@ contract GenesisVaultAdminFacet {
   ) external onlyAdmin {
     if (_managementFee > MAX_MANAGEMENT_FEE) revert InvalidFeeValue();
     if (_performanceFee > MAX_PERFORMANCE_FEE) revert InvalidFeeValue();
+    if (_feeRecipient == address(0)) revert InvalidAddress();
 
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     if (s.feeRecipient != _feeRecipient) {
