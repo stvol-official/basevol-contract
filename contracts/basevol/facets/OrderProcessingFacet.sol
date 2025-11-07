@@ -22,10 +22,18 @@ contract OrderProcessingFacet is ReentrancyGuard {
     FilledOrder[] calldata transactions
   ) external nonReentrant onlyOperator {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    if (bvs.lastFilledOrderId + 1 > transactions[0].idx) revert LibBaseVolStrike.InvalidId();
+
+    // Check for empty array
+    if (transactions.length == 0) revert LibBaseVolStrike.InvalidAmount();
+
+    uint256 lastId = bvs.lastFilledOrderId;
 
     for (uint i = 0; i < transactions.length; i++) {
       FilledOrder calldata order = transactions[i];
+
+      // Verify each transaction has an ID greater than the previous one
+      // This prevents duplicate orders and ensures monotonically increasing IDs
+      if (order.idx <= lastId) revert LibBaseVolStrike.InvalidId();
 
       // Calculate required amounts
       uint256 overAmount = order.overPrice * order.unit * PRICE_UNIT;
@@ -56,6 +64,9 @@ contract OrderProcessingFacet is ReentrancyGuard {
       if (round.isSettled) {
         _settleFilledOrder(round, orders[orders.length - 1]);
       }
+
+      // Update lastId for next iteration
+      lastId = order.idx;
     }
     bvs.lastFilledOrderId = transactions[transactions.length - 1].idx;
     bvs.lastSubmissionTime = block.timestamp;

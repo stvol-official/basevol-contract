@@ -13,7 +13,20 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
 import { BaseVolOneMinStorage } from "../storage/BaseVolOneMinStorage.sol";
-import { Round, Coupon, WithdrawalRequest, ProductRound, SettlementResult, WinPosition, OneMinOrder, Position, ClosingOneMinOrder, PriceInfo, PriceUpdateData, PriceLazerData } from "../types/Types.sol";
+import {
+  Round,
+  Coupon,
+  WithdrawalRequest,
+  ProductRound,
+  SettlementResult,
+  WinPosition,
+  OneMinOrder,
+  Position,
+  ClosingOneMinOrder,
+  PriceInfo,
+  PriceUpdateData,
+  PriceLazerData
+} from "../types/Types.sol";
 import { IBaseVolErrors } from "../errors/BaseVolErrors.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
@@ -118,7 +131,9 @@ contract BaseVolOneMin is
     emit DebugLog(string.concat("Price updated for timestamp: ", Strings.toString(timestamp)));
   }
 
-  function submitOneMinOrders(OneMinOrder[] calldata orders) external nonReentrant whenNotPaused onlyOperator {
+  function submitOneMinOrders(
+    OneMinOrder[] calldata orders
+  ) external nonReentrant whenNotPaused onlyOperator {
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
     for (uint i = 0; i < orders.length; i++) {
       OneMinOrder calldata order = orders[i];
@@ -142,7 +157,6 @@ contract BaseVolOneMin is
         );
         continue;
       }
-
       try
         $.clearingHouse.lockInEscrow(
           address(this),
@@ -166,13 +180,14 @@ contract BaseVolOneMin is
         );
         continue;
       }
-
       $.oneMinOrders[order.idx] = order;
       emit DebugLog(string.concat("Order ", Strings.toString(order.idx), " added"));
     }
   }
 
-  function closeOneMinOrders(ClosingOneMinOrder[] calldata closingOrders) public whenNotPaused onlyOperator {
+  function closeOneMinOrders(
+    ClosingOneMinOrder[] calldata closingOrders
+  ) public whenNotPaused onlyOperator {
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
     for (uint i = 0; i < closingOrders.length; i++) {
       ClosingOneMinOrder calldata closingOrder = closingOrders[i];

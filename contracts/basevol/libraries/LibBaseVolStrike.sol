@@ -355,6 +355,9 @@ library LibBaseVolStrike {
   error InsufficientUnderRedeemable();
   error CommissionExceedsRedemption();
 
+  // Error for duplicate order prevention
+  error DuplicateOrderId();
+
   // Access control modifiers
   modifier onlyAdmin() {
     require(msg.sender == diamondStorage().adminAddress, "Only admin");
