@@ -382,10 +382,14 @@ contract VaultCoreFacet {
     uint256 totalShares = 0;
 
     uint256[] memory userEpochs = s.userDepositEpochs[controller];
-    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    uint256 startIndex = s.userDepositEpochCursor[controller];
+    uint256 epochsToCheck = startIndex + 50 > userEpochs.length
+      ? userEpochs.length - startIndex
+      : 50;
 
     for (uint256 i = 0; i < epochsToCheck && remainingAssets > 0; i++) {
-      uint256 epoch = userEpochs[i];
+      uint256 arrayIndex = startIndex + i;
+      uint256 epoch = userEpochs[arrayIndex];
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -421,19 +425,22 @@ contract VaultCoreFacet {
         s.userEpochClaimedDepositAssets[controller][epoch] += assetsToProcess;
 
         remainingAssets -= assetsToProcess;
-
-        // If this epoch is fully claimed, remove it from the list
-        if (
-          s.userEpochDepositAssets[controller][epoch] ==
-          s.userEpochClaimedDepositAssets[controller][epoch]
-        ) {
-          _removeEpochFromUserDepositList(controller, i);
-          // Adjust index and epochsToCheck since we removed an element
-          i--;
-          epochsToCheck--;
-        }
       }
     }
+
+    // Update cursor: move to next unprocessed epoch (only fully claimed epochs)
+    uint256 newCursor = startIndex;
+    for (uint256 i = startIndex; i < userEpochs.length; i++) {
+      uint256 epoch = userEpochs[i];
+      if (
+        s.userEpochDepositAssets[controller][epoch] !=
+        s.userEpochClaimedDepositAssets[controller][epoch]
+      ) {
+        break; // Stop at first incomplete epoch
+      }
+      newCursor = i + 1;
+    }
+    s.userDepositEpochCursor[controller] = newCursor;
 
     shares = totalShares;
     LibERC20._mint(receiver, shares);
@@ -465,10 +472,14 @@ contract VaultCoreFacet {
     uint256 totalAssetsUsed = 0;
 
     uint256[] memory userEpochs = s.userDepositEpochs[controller];
-    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    uint256 startIndex = s.userDepositEpochCursor[controller];
+    uint256 epochsToCheck = startIndex + 50 > userEpochs.length
+      ? userEpochs.length - startIndex
+      : 50;
 
     for (uint256 i = 0; i < epochsToCheck && remainingShares > 0; i++) {
-      uint256 epoch = userEpochs[i];
+      uint256 arrayIndex = startIndex + i;
+      uint256 epoch = userEpochs[arrayIndex];
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -507,21 +518,24 @@ contract VaultCoreFacet {
         s.userEpochClaimedDepositAssets[controller][epoch] += assetsNeeded;
 
         remainingShares -= sharesToProcess;
-
-        // If this epoch is fully claimed, remove it from the list
-        if (
-          s.userEpochDepositAssets[controller][epoch] ==
-          s.userEpochClaimedDepositAssets[controller][epoch]
-        ) {
-          _removeEpochFromUserDepositList(controller, i);
-          // Adjust index and epochsToCheck since we removed an element
-          i--;
-          epochsToCheck--;
-        }
       }
     }
 
     require(remainingShares == 0, "VaultCoreFacet: Insufficient claimable for shares");
+
+    // Update cursor: move to next unprocessed epoch (only fully claimed epochs)
+    uint256 newCursor = startIndex;
+    for (uint256 i = startIndex; i < userEpochs.length; i++) {
+      uint256 epoch = userEpochs[i];
+      if (
+        s.userEpochDepositAssets[controller][epoch] !=
+        s.userEpochClaimedDepositAssets[controller][epoch]
+      ) {
+        break; // Stop at first incomplete epoch
+      }
+      newCursor = i + 1;
+    }
+    s.userDepositEpochCursor[controller] = newCursor;
 
     assets = totalAssetsUsed;
     LibERC20._mint(receiver, shares);
@@ -563,10 +577,14 @@ contract VaultCoreFacet {
     uint256 totalPerformanceFees = 0;
 
     uint256[] memory userEpochs = s.userRedeemEpochs[controller];
-    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    uint256 startIndex = s.userRedeemEpochCursor[controller];
+    uint256 epochsToCheck = startIndex + 50 > userEpochs.length
+      ? userEpochs.length - startIndex
+      : 50;
 
     for (uint256 i = 0; i < epochsToCheck && remainingGrossAssets > 0; i++) {
-      uint256 epoch = userEpochs[i];
+      uint256 arrayIndex = startIndex + i;
+      uint256 epoch = userEpochs[arrayIndex];
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -602,19 +620,22 @@ contract VaultCoreFacet {
         s.userEpochClaimedRedeemShares[controller][epoch] += epochSharesNeeded;
 
         remainingGrossAssets -= assetsToProcess;
-
-        // If this epoch is fully claimed, remove it from the list
-        if (
-          s.userEpochRedeemShares[controller][epoch] ==
-          s.userEpochClaimedRedeemShares[controller][epoch]
-        ) {
-          _removeEpochFromUserRedeemList(controller, i);
-          // Adjust index and epochsToCheck since we removed an element
-          i--;
-          epochsToCheck--;
-        }
       }
     }
+
+    // Update cursor: move to next unprocessed epoch (only fully claimed epochs)
+    uint256 newCursor = startIndex;
+    for (uint256 i = startIndex; i < userEpochs.length; i++) {
+      uint256 epoch = userEpochs[i];
+      if (
+        s.userEpochRedeemShares[controller][epoch] !=
+        s.userEpochClaimedRedeemShares[controller][epoch]
+      ) {
+        break; // Stop at first incomplete epoch
+      }
+      newCursor = i + 1;
+    }
+    s.userRedeemEpochCursor[controller] = newCursor;
 
     shares = totalShares;
 
@@ -661,10 +682,14 @@ contract VaultCoreFacet {
     uint256 totalPerformanceFees = 0;
 
     uint256[] memory userEpochs = s.userRedeemEpochs[controller];
-    uint256 epochsToCheck = userEpochs.length > 50 ? 50 : userEpochs.length;
+    uint256 startIndex = s.userRedeemEpochCursor[controller];
+    uint256 epochsToCheck = startIndex + 50 > userEpochs.length
+      ? userEpochs.length - startIndex
+      : 50;
 
     for (uint256 i = 0; i < epochsToCheck && remainingShares > 0; i++) {
-      uint256 epoch = userEpochs[i];
+      uint256 arrayIndex = startIndex + i;
+      uint256 epoch = userEpochs[arrayIndex];
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
       if (!roundData.isSettled) continue;
@@ -696,19 +721,22 @@ contract VaultCoreFacet {
         s.userEpochClaimedRedeemShares[controller][epoch] += sharesToProcess;
 
         remainingShares -= sharesToProcess;
-
-        // If this epoch is fully claimed, remove it from the list
-        if (
-          s.userEpochRedeemShares[controller][epoch] ==
-          s.userEpochClaimedRedeemShares[controller][epoch]
-        ) {
-          _removeEpochFromUserRedeemList(controller, i);
-          // Adjust index and epochsToCheck since we removed an element
-          i--;
-          epochsToCheck--;
-        }
       }
     }
+
+    // Update cursor: move to next unprocessed epoch (only fully claimed epochs)
+    uint256 newCursor = startIndex;
+    for (uint256 i = startIndex; i < userEpochs.length; i++) {
+      uint256 epoch = userEpochs[i];
+      if (
+        s.userEpochRedeemShares[controller][epoch] !=
+        s.userEpochClaimedRedeemShares[controller][epoch]
+      ) {
+        break; // Stop at first incomplete epoch
+      }
+      newCursor = i + 1;
+    }
+    s.userRedeemEpochCursor[controller] = newCursor;
 
     // Apply exit cost
     uint256 exitCostAmount = s.exitCost;
@@ -747,7 +775,7 @@ contract VaultCoreFacet {
 
   /**
    * @notice Calculate total claimable deposit assets across epochs
-   * @dev Checks all user's deposit epochs (no time-based limit to prevent asset loss)
+   * @dev Uses cursor-based iteration to prevent DoS, checks up to 50 epochs from cursor
    */
   function _calculateClaimableDepositAssetsAcrossEpochs(
     address user
@@ -756,8 +784,10 @@ contract VaultCoreFacet {
     uint256 total = 0;
 
     uint256[] memory userEpochs = s.userDepositEpochs[user];
+    uint256 startIndex = s.userDepositEpochCursor[user];
+    uint256 endIndex = startIndex + 50 > userEpochs.length ? userEpochs.length : startIndex + 50;
 
-    for (uint256 i = 0; i < userEpochs.length; i++) {
+    for (uint256 i = startIndex; i < endIndex; i++) {
       uint256 epoch = userEpochs[i];
 
       if (s.roundData[epoch].isSettled) {
@@ -770,7 +800,7 @@ contract VaultCoreFacet {
 
   /**
    * @notice Calculate total claimable redeem shares across epochs
-   * @dev Checks all user's redeem epochs (no time-based limit to prevent asset loss)
+   * @dev Uses cursor-based iteration to prevent DoS, checks up to 50 epochs from cursor
    */
   function _calculateClaimableRedeemSharesAcrossEpochs(
     address user
@@ -779,8 +809,10 @@ contract VaultCoreFacet {
     uint256 total = 0;
 
     uint256[] memory userEpochs = s.userRedeemEpochs[user];
+    uint256 startIndex = s.userRedeemEpochCursor[user];
+    uint256 endIndex = startIndex + 50 > userEpochs.length ? userEpochs.length : startIndex + 50;
 
-    for (uint256 i = 0; i < userEpochs.length; i++) {
+    for (uint256 i = startIndex; i < endIndex; i++) {
       uint256 epoch = userEpochs[i];
 
       if (s.roundData[epoch].isSettled) {
@@ -793,7 +825,7 @@ contract VaultCoreFacet {
 
   /**
    * @notice Calculate total claimable redeem assets across epochs
-   * @dev Checks all user's redeem epochs (no time-based limit to prevent asset loss)
+   * @dev Uses cursor-based iteration to prevent DoS, checks up to 50 epochs from cursor
    */
   function _calculateClaimableRedeemAssetsAcrossEpochs(
     address user
@@ -802,8 +834,10 @@ contract VaultCoreFacet {
     uint256 total = 0;
 
     uint256[] memory userEpochs = s.userRedeemEpochs[user];
+    uint256 startIndex = s.userRedeemEpochCursor[user];
+    uint256 endIndex = startIndex + 50 > userEpochs.length ? userEpochs.length : startIndex + 50;
 
-    for (uint256 i = 0; i < userEpochs.length; i++) {
+    for (uint256 i = startIndex; i < endIndex; i++) {
       uint256 epoch = userEpochs[i];
 
       LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];

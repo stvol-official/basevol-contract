@@ -102,6 +102,9 @@ library LibGenesisVaultStorage {
     address clearingHouse; // ClearingHouse contract address authorized for direct deposits
     // ============ Share Price Validation ============
     uint256 lastSettledSharePrice; // Last successfully settled share price for deviation checks
+    // ============ Epoch Cursor Tracking (Soft Delete) ============
+    mapping(address => uint256) userDepositEpochCursor; // Index of next unprocessed deposit epoch for each user
+    mapping(address => uint256) userRedeemEpochCursor; // Index of next unprocessed redeem epoch for each user
   }
 
   /* IMPORTANT: Add new variables here to maintain storage layout */
