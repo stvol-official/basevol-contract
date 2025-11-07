@@ -272,10 +272,6 @@ contract RoundManagementFacet {
     (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
       .parsePayloadHeader(payload);
 
-    // Vector 2: Stale oracle check - ensure price data is not too old
-    require(block.timestamp >= publishTime, "Invalid publish time: future timestamp");
-    require(block.timestamp - publishTime <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
-
     if (channel != PythLazerLib.Channel.RealTime) {
       revert LibBaseVolStrike.InvalidChannel();
     }
