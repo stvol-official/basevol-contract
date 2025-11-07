@@ -122,7 +122,7 @@ abstract contract BaseVolStrike is
   ) external payable whenNotPaused onlyOperator {
     if ((initDate - _getStartTimestamp()) % _getIntervalSeconds() != 0) revert InvalidInitDate(); // Ensure initDate aligns with the interval boundary
 
-    PriceData[] memory priceData = _processPythLazerPriceUpdate(priceLazerData);
+    PriceData[] memory priceData = _processPythLazerPriceUpdate(priceLazerData, initDate);
 
     uint256 startEpoch = _epochAt(initDate);
     uint256 currentEpochNumber = _epochAt(block.timestamp);
@@ -682,7 +682,8 @@ abstract contract BaseVolStrike is
 
   /* internal functions */
   function _processPythLazerPriceUpdate(
-    PriceLazerData memory priceLazerData
+    PriceLazerData memory priceLazerData,
+    uint64 datetime
   ) internal returns (PriceData[] memory) {
     BaseVolStrikeStorage.Layout storage $ = _getStorage();
 
@@ -700,6 +701,9 @@ abstract contract BaseVolStrike is
 
     (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
       .parsePayloadHeader(payload);
+
+    require(datetime >= publishTime, "Invalid publish time: future timestamp");
+    require(datetime - publishTime <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
 
     if (channel != PythLazerLib.Channel.RealTime) {
       revert InvalidChannel();

@@ -604,6 +604,9 @@ contract BaseVolOneMin is
     (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
       .parsePayloadHeader(payload);
 
+    require(timestamp >= publishTime, "Invalid publish time: future timestamp");
+    require(timestamp - publishTime <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
+
     if (channel != PythLazerLib.Channel.RealTime) {
       revert InvalidChannel();
     }

@@ -43,7 +43,7 @@ contract RoundManagementFacet {
     if ((initDate - _getStartTimestamp()) % _getIntervalSeconds() != 0)
       revert LibBaseVolStrike.InvalidInitDate();
 
-    PriceData[] memory priceData = _processPythLazerPriceUpdate(priceLazerData);
+    PriceData[] memory priceData = _processPythLazerPriceUpdate(priceLazerData, initDate);
 
     uint256 startEpoch = _epochAt(initDate);
     uint256 currentEpochNumber = _epochAt(block.timestamp);
@@ -253,7 +253,8 @@ contract RoundManagementFacet {
   }
 
   function _processPythLazerPriceUpdate(
-    PriceLazerData memory priceLazerData
+    PriceLazerData memory priceLazerData,
+    uint64 datetime
   ) internal returns (PriceData[] memory) {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
 
@@ -271,6 +272,9 @@ contract RoundManagementFacet {
 
     (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
       .parsePayloadHeader(payload);
+
+    require(datetime >= publishTime, "Invalid publish time: future timestamp");
+    require(datetime - publishTime <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
 
     if (channel != PythLazerLib.Channel.RealTime) {
       revert LibBaseVolStrike.InvalidChannel();
