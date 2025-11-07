@@ -67,6 +67,12 @@ contract GenesisStrategy is
 
   event DebugLog(string message);
 
+  // Expected balance tracking events
+  event ExpectedBalanceUpdated(uint256 newBalance, string operation, uint256 amount);
+  event ExpectedBalanceInitialized(uint256 initialBalance, uint256 timestamp);
+  event ExpectedBalanceResynced(uint256 oldExpected, uint256 newActual, uint256 timestamp);
+  event EmergencyBalanceReset(uint256 actualBalance, uint256 timestamp);
+
   /// @dev Authorize caller if it is authorized one.
   modifier authCaller(address authorized) {
     if (_msgSender() != authorized) {
@@ -176,6 +182,10 @@ contract GenesisStrategy is
     uint256 idleBalance = getStrategyIdleAssets();
     if (idleBalance > 0) {
       IERC20(asset()).safeTransfer(address($.vault), idleBalance);
+      
+      // Track outgoing funds
+      _decreaseExpectedBalance(idleBalance);
+      
       emit DebugLog(
         string(abi.encodePacked("Transferred ", idleBalance.toString(), " idle assets to vault"))
       );
@@ -207,6 +217,10 @@ contract GenesisStrategy is
     if (vaultIdleAssets > 0) {
       IERC20 _asset = $.asset;
       _asset.safeTransferFrom(address(_vault), address(this), vaultIdleAssets);
+      
+      // Track incoming funds
+      _increaseExpectedBalance(vaultIdleAssets);
+      
       emit DebugLog(
         string(
           abi.encodePacked(
@@ -338,6 +352,10 @@ contract GenesisStrategy is
 
       if (transferAmount > 0) {
         IERC20(asset()).safeTransfer(address($.vault), transferAmount);
+        
+        // Track outgoing funds
+        _decreaseExpectedBalance(transferAmount);
+        
         emit DebugLog(
           string(
             abi.encodePacked(
@@ -373,6 +391,10 @@ contract GenesisStrategy is
     if (remaining > 0 && idleBalance > 0) {
       uint256 fromIdle = Math.min(remaining, idleBalance);
       IERC20(asset()).safeTransfer(vault(), fromIdle);
+      
+      // Track outgoing funds
+      _decreaseExpectedBalance(fromIdle);
+      
       remaining -= fromIdle;
       emit DebugLog(string(abi.encodePacked("Provided from idle: ", fromIdle.toString())));
     }
@@ -767,8 +789,144 @@ contract GenesisStrategy is
     return GenesisStrategyStorage.layout().strategyBalance;
   }
 
+  /**
+   * @notice Get strategy idle assets (donation-proof)
+   * @dev Returns expected balance instead of actual balanceOf
+   * @dev Falls back to actual balance if not initialized (upgrade compatibility)
+   * @return Expected idle assets (ignores donations)
+   */
   function getStrategyIdleAssets() public view returns (uint256) {
-    return IERC20(asset()).balanceOf(address(this));
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    
+    // Fallback to actual balance if not initialized (upgrade compatibility)
+    if ($.expectedStrategyBalance == 0) {
+      return IERC20(asset()).balanceOf(address(this));
+    }
+    
+    return $.expectedStrategyBalance;
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                    EXPECTED BALANCE TRACKING
+    //////////////////////////////////////////////////////////////*/
+
+  /**
+   * @notice Increase expected balance
+   * @dev Called when funds enter strategy
+   * @param amount Amount to add to expected balance
+   */
+  function _increaseExpectedBalance(uint256 amount) internal {
+    if (amount == 0) return;
+    
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    $.expectedStrategyBalance += amount;
+    
+    emit ExpectedBalanceUpdated($.expectedStrategyBalance, "INCREASE", amount);
+  }
+
+  /**
+   * @notice Decrease expected balance
+   * @dev Called when funds leave strategy
+   * @param amount Amount to subtract from expected balance
+   */
+  function _decreaseExpectedBalance(uint256 amount) internal {
+    if (amount == 0) return;
+    
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    
+    require(
+      $.expectedStrategyBalance >= amount,
+      "GenesisStrategy: Insufficient expected balance"
+    );
+    
+    $.expectedStrategyBalance -= amount;
+    
+    emit ExpectedBalanceUpdated($.expectedStrategyBalance, "DECREASE", amount);
+  }
+
+  /**
+   * @notice Initialize expectedStrategyBalance after upgrade
+   * @dev CRITICAL: Must be called immediately after upgrade
+   * @dev Can be called multiple times to re-sync if needed
+   */
+  function initializeExpectedBalance() external onlyOwner {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    
+    uint256 actualBalance = IERC20(asset()).balanceOf(address(this));
+    
+    if ($.expectedStrategyBalance == 0) {
+      // First initialization
+      $.expectedStrategyBalance = actualBalance;
+      emit ExpectedBalanceInitialized(actualBalance, block.timestamp);
+    } else {
+      // Re-sync (owner only)
+      uint256 oldExpected = $.expectedStrategyBalance;
+      $.expectedStrategyBalance = actualBalance;
+      emit ExpectedBalanceResynced(oldExpected, actualBalance, block.timestamp);
+    }
+  }
+
+  /**
+   * @notice Get actual vs expected balance discrepancy
+   * @dev Used for monitoring and health checks
+   * @return actual Actual token balance
+   * @return expected Expected token balance
+   * @return discrepancy Absolute difference (donation amount)
+   */
+  function getBalanceDiscrepancy() external view returns (
+    uint256 actual,
+    uint256 expected,
+    uint256 discrepancy
+  ) {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    
+    actual = IERC20(asset()).balanceOf(address(this));
+    expected = $.expectedStrategyBalance;
+    
+    discrepancy = actual > expected ? actual - expected : expected - actual;
+    
+    return (actual, expected, discrepancy);
+  }
+
+  /**
+   * @notice Check if expected balance is healthy
+   * @dev Tolerance: 1 USDC (allows minor rounding errors)
+   * @return isHealthy True if discrepancy is within tolerance
+   * @return actual Actual balance
+   * @return expected Expected balance
+   * @return discrepancy Absolute difference
+   */
+  function checkBalanceHealth() external view returns (
+    bool isHealthy,
+    uint256 actual,
+    uint256 expected,
+    uint256 discrepancy
+  ) {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    
+    actual = IERC20(asset()).balanceOf(address(this));
+    expected = $.expectedStrategyBalance;
+    discrepancy = actual > expected ? actual - expected : expected - actual;
+    
+    // Tolerance: 1 USDC (1e6)
+    uint256 tolerance = 1e6;
+    isHealthy = discrepancy <= tolerance;
+    
+    return (isHealthy, actual, expected, discrepancy);
+  }
+
+  /**
+   * @notice Emergency function to reset expected balance
+   * @dev Only callable by owner when strategy is idle
+   * @dev Use only after manual investigation
+   */
+  function emergencyResetExpectedBalance() external onlyOwner whenIdle {
+    GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
+    
+    uint256 actualBalance = IERC20(asset()).balanceOf(address(this));
+    $.expectedStrategyBalance = actualBalance;
+    
+    emit EmergencyBalanceReset(actualBalance, block.timestamp);
   }
 
   /*//////////////////////////////////////////////////////////////
@@ -967,6 +1125,10 @@ contract GenesisStrategy is
     if (amount < min) return;
     uint256 adjusted = amount > max ? max : amount;
     IERC20(asset()).safeTransfer(address($.baseVolManager), adjusted);
+    
+    // Track outgoing funds
+    _decreaseExpectedBalance(adjusted);
+    
     $.baseVolManager.depositToClearingHouse(adjusted);
   }
 
@@ -978,6 +1140,10 @@ contract GenesisStrategy is
     if (amount < min) return;
     uint256 adjusted = amount > max ? max : amount;
     IERC20(asset()).safeTransfer(address($.morphoVaultManager), adjusted);
+    
+    // Track outgoing funds
+    _decreaseExpectedBalance(adjusted);
+    
     $.morphoVaultManager.depositToMorpho(adjusted);
   }
 
@@ -1150,6 +1316,9 @@ contract GenesisStrategy is
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
     if (success) {
+      // Track incoming funds from BaseVol
+      _increaseExpectedBalance(amount);
+      
       // Calculate profit/loss before updating state (similar to Morpho logic)
       uint256 currentBaseVolBalance = getBaseVolAssets();
       uint256 actualBaseVolBalance = currentBaseVolBalance + amount;
@@ -1203,6 +1372,9 @@ contract GenesisStrategy is
         // Transfer to vault as idle assets
         if (transferAmount > 0) {
           IERC20(asset()).safeTransfer(address(vault()), transferAmount);
+          
+          // Track outgoing funds
+          _decreaseExpectedBalance(transferAmount);
         }
 
         emit DebugLog(
@@ -1230,6 +1402,9 @@ contract GenesisStrategy is
       if (strategyStatus() == StrategyStatus.DEUTILIZING) {
         // Transfer all assets to vault
         IERC20(asset()).safeTransfer(address(vault()), amount);
+        
+        // Track outgoing funds
+        _decreaseExpectedBalance(amount);
 
         emit DebugLog(
           string(
@@ -1267,6 +1442,9 @@ contract GenesisStrategy is
       if (remainingNeeded > 0) {
         // Transfer to vault first
         IERC20(asset()).safeTransfer(address(vault()), amount);
+        
+        // Track outgoing funds
+        _decreaseExpectedBalance(amount);
 
         // Calculate how much we still need after this withdrawal
         uint256 stillNeeded = remainingNeeded > amount ? remainingNeeded - amount : 0;
@@ -1310,6 +1488,9 @@ contract GenesisStrategy is
       } else {
         // Normal operation: transfer assets back to vault
         IERC20(asset()).safeTransfer(address(vault()), amount);
+        
+        // Track outgoing funds
+        _decreaseExpectedBalance(amount);
       }
 
       emit BaseVolDeutilize(_msgSender(), amount);
@@ -1329,6 +1510,9 @@ contract GenesisStrategy is
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
     if (success) {
+      // Track incoming funds from Morpho
+      _increaseExpectedBalance(amount);
+      
       // Calculate profit/loss before updating state (similar to BaseVol logic)
       uint256 currentMorphoBalance = getMorphoAssets();
       uint256 actualMorphoBalance = currentMorphoBalance + amount;
@@ -1382,6 +1566,9 @@ contract GenesisStrategy is
         // Transfer to vault as idle assets
         if (transferAmount > 0) {
           IERC20(asset()).safeTransfer(address(vault()), transferAmount);
+          
+          // Track outgoing funds
+          _decreaseExpectedBalance(transferAmount);
         }
 
         emit DebugLog(
@@ -1409,6 +1596,9 @@ contract GenesisStrategy is
       if (strategyStatus() == StrategyStatus.DEUTILIZING) {
         // Transfer all assets to vault
         IERC20(asset()).safeTransfer(address(vault()), amount);
+        
+        // Track outgoing funds
+        _decreaseExpectedBalance(amount);
 
         emit DebugLog(
           string(
@@ -1442,6 +1632,9 @@ contract GenesisStrategy is
       if (remainingNeeded > 0) {
         // Transfer to vault for withdrawal request
         IERC20(asset()).safeTransfer(address(vault()), amount);
+        
+        // Track outgoing funds
+        _decreaseExpectedBalance(amount);
 
         // Calculate if we still need more (should be 0 or very small)
         uint256 stillNeeded = remainingNeeded > amount ? remainingNeeded - amount : 0;
@@ -1463,6 +1656,10 @@ contract GenesisStrategy is
         // Normal operation: this shouldn't happen for Morpho in current design
         // but handle it gracefully
         IERC20(asset()).safeTransfer(address(vault()), amount);
+        
+        // Track outgoing funds
+        _decreaseExpectedBalance(amount);
+        
         emit DebugLog("Morpho withdrawal outside of vault request");
       }
 

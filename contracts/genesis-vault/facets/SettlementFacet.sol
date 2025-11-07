@@ -5,6 +5,7 @@ import { LibGenesisVaultStorage } from "../libraries/LibGenesisVaultStorage.sol"
 import { LibGenesisVault } from "../libraries/LibGenesisVault.sol";
 import { LibERC20 } from "../libraries/LibERC20.sol";
 import { IGenesisStrategy } from "../../core/vault/interfaces/IGenesisStrategy.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /**
@@ -17,6 +18,7 @@ contract SettlementFacet {
 
   uint256 internal constant FLOAT_PRECISION = 1e18;
   uint256 internal constant SETTLEMENT_BATCH_SIZE = 50;
+  uint256 internal constant MINIMUM_FIRST_DEPOSIT = 1000e6; // 1000 USDC
 
   // ============ Events ============
   event RoundSettled(uint256 indexed epoch, uint256 sharePrice);
@@ -56,6 +58,7 @@ contract SettlementFacet {
     uint256 redeemRemaining
   );
   event EpochSettlementCompleted(uint256 indexed epoch);
+  event DepositRefunded(address indexed user, uint256 indexed epoch, uint256 assets, string reason);
 
   // ============ Custom Errors ============
   error RoundAlreadySettled(uint256 epoch);
@@ -193,7 +196,6 @@ contract SettlementFacet {
     return totalPending;
   }
 
-
   /**
    * @notice Withdraw all strategy assets (BaseVol, Morpho, and idle) for settlement accounting
    */
@@ -304,17 +306,15 @@ contract SettlementFacet {
     return string(bstr);
   }
 
-
   /**
    * @notice Auto-process deposit requests for an epoch in batches
    * @param epoch The epoch to process
    * @return processed Number of users processed in this batch
    * @return remaining Number of users remaining to process
    */
-  function _autoProcessEpochDeposits(uint256 epoch)
-    internal
-    returns (uint256 processed, uint256 remaining)
-  {
+  function _autoProcessEpochDeposits(
+    uint256 epoch
+  ) internal returns (uint256 processed, uint256 remaining) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
@@ -339,10 +339,9 @@ contract SettlementFacet {
    * @return processed Number of users processed in this batch
    * @return remaining Number of users remaining to process
    */
-  function _autoProcessEpochRedeems(uint256 epoch)
-    internal
-    returns (uint256 processed, uint256 remaining)
-  {
+  function _autoProcessEpochRedeems(
+    uint256 epoch
+  ) internal returns (uint256 processed, uint256 remaining) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
@@ -374,8 +373,28 @@ contract SettlementFacet {
     uint256 claimableAssets = LibGenesisVault.calculateClaimableForEpoch(user, epoch, true);
     if (claimableAssets == 0) return;
 
+    // SECURITY: Minimum first deposit check (donation attack prevention)
+    if (s.totalSupply == 0 && claimableAssets < MINIMUM_FIRST_DEPOSIT) {
+      revert("SettlementFacet: First deposit too small");
+    }
+
     // Calculate shares to mint using epoch-specific share price
     uint256 sharesToMint = (claimableAssets * (10 ** s.decimals)) / roundData.sharePrice;
+
+    // SECURITY: Zero share prevention (donation attack prevention)
+    // Refund instead of revert to prevent griefing attack
+    if (sharesToMint == 0) {
+      // Refund the deposited assets to the user
+      IERC20(s.asset).transfer(user, claimableAssets);
+
+      // Mark as fully claimed (refunded) to remove from pending
+      roundData.claimedDepositAssets += claimableAssets;
+      s.userEpochClaimedDepositAssets[user][epoch] += claimableAssets;
+
+      // Emit refund event
+      emit DepositRefunded(user, epoch, claimableAssets, "Would receive 0 shares");
+      return;
+    }
 
     // Update WAEP for the user with epoch-specific share price
     _updateUserWAEP(user, sharesToMint, roundData.sharePrice);
@@ -572,11 +591,9 @@ contract SettlementFacet {
    * @return remainingRedeems Number of redeem users remaining to process
    * @return isComplete Whether settlement is complete
    */
-  function getRemainingSettlementCount(uint256 epoch)
-    external
-    view
-    returns (uint256 remainingDeposits, uint256 remainingRedeems, bool isComplete)
-  {
+  function getRemainingSettlementCount(
+    uint256 epoch
+  ) external view returns (uint256 remainingDeposits, uint256 remainingRedeems, bool isComplete) {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
@@ -608,7 +625,9 @@ contract SettlementFacet {
    * @return totalRedeems Total number of redeem users
    * @return processedRedeems Number of redeem users processed
    */
-  function getSettlementProgress(uint256 epoch)
+  function getSettlementProgress(
+    uint256 epoch
+  )
     external
     view
     returns (

@@ -42,6 +42,8 @@ library GenesisStrategyStorage {
     // Profit/loss tracking for each manager
     uint256 baseVolInitialBalance; // Initial BaseVol balance for profit/loss calculation
     uint256 morphoInitialBalance; // Initial Morpho balance for profit/loss calculation
+    // Expected balance tracking (donation attack prevention)
+    uint256 expectedStrategyBalance; // Expected idle balance (ignores external donations)
 
     /* IMPORTANT: you can add new variables here */
   }

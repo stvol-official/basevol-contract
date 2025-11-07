@@ -20,6 +20,7 @@ contract VaultCoreFacet {
   using Math for uint256;
 
   uint256 internal constant FLOAT_PRECISION = 1e18;
+  uint256 internal constant MINIMUM_FIRST_DEPOSIT = 1000e6; // 1000 USDC
 
   // ============ Events ============
   event Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares);
@@ -393,9 +394,21 @@ contract VaultCoreFacet {
       uint256 assetsToProcess = Math.min(remainingAssets, claimableAssets);
 
       if (assetsToProcess > 0) {
+        // SECURITY: Minimum first deposit check (donation attack prevention)
+        if (s.totalSupply == 0 && assetsToProcess < MINIMUM_FIRST_DEPOSIT) {
+          revert("VaultCoreFacet: First deposit too small");
+        }
+
         // Use epoch-specific share price
         // shares = assets * (10^shareDecimals) / sharePrice
         uint256 epochShares = (assetsToProcess * (10 ** s.decimals)) / roundData.sharePrice;
+        
+        // SECURITY: Zero share prevention (donation attack prevention)
+        // Skip this epoch instead of reverting to prevent griefing attack
+        if (epochShares == 0) {
+          continue; // Skip to next epoch
+        }
+        
         totalShares += epochShares;
 
         // Update WAEP for the receiver with epoch-specific share price
@@ -470,6 +483,18 @@ contract VaultCoreFacet {
       if (sharesToProcess > 0) {
         // Calculate assets needed for these shares using epoch-specific price
         uint256 assetsNeeded = (sharesToProcess * roundData.sharePrice) / (10 ** s.decimals);
+        
+        // SECURITY: Minimum first deposit check (donation attack prevention)
+        if (s.totalSupply == 0 && assetsNeeded < MINIMUM_FIRST_DEPOSIT) {
+          revert("VaultCoreFacet: First deposit too small");
+        }
+        
+        // SECURITY: Zero share prevention (donation attack prevention)
+        // Skip this epoch instead of reverting to prevent griefing attack
+        if (sharesToProcess == 0) {
+          continue; // Skip to next epoch
+        }
+        
         totalAssetsUsed += assetsNeeded;
 
         // Update WAEP for the receiver with epoch-specific share price
