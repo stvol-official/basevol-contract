@@ -109,7 +109,7 @@ contract BaseVolOneMin is
   function updatePrice(
     PriceLazerData calldata priceLazerData,
     uint64 timestamp
-  ) external payable onlyOperator {
+  ) external payable whenNotPaused onlyOperator {
     // timestamp should be either XX:00
     if (timestamp % ROUND_INTERVAL != 0) revert InvalidTime();
 
@@ -118,7 +118,7 @@ contract BaseVolOneMin is
     emit DebugLog(string.concat("Price updated for timestamp: ", Strings.toString(timestamp)));
   }
 
-  function submitOneMinOrders(OneMinOrder[] calldata orders) external nonReentrant onlyOperator {
+  function submitOneMinOrders(OneMinOrder[] calldata orders) external nonReentrant whenNotPaused onlyOperator {
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
     for (uint i = 0; i < orders.length; i++) {
       OneMinOrder calldata order = orders[i];
@@ -172,7 +172,7 @@ contract BaseVolOneMin is
     }
   }
 
-  function closeOneMinOrders(ClosingOneMinOrder[] calldata closingOrders) public onlyOperator {
+  function closeOneMinOrders(ClosingOneMinOrder[] calldata closingOrders) public whenNotPaused onlyOperator {
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
     for (uint i = 0; i < closingOrders.length; i++) {
       ClosingOneMinOrder calldata closingOrder = closingOrders[i];
@@ -309,7 +309,7 @@ contract BaseVolOneMin is
 
   function settleOneMinOrders(
     uint256[] calldata orderIds
-  ) public onlyOperator returns (uint256[] memory) {
+  ) public whenNotPaused onlyOperator returns (uint256[] memory) {
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
     address vaultAddress = $.vault;
     if (vaultAddress == address(0)) revert InvalidAddress();
@@ -442,7 +442,7 @@ contract BaseVolOneMin is
     return result;
   }
 
-  function closeOneMinOrder(uint256 idx, uint256 price) public onlyOperator {
+  function closeOneMinOrder(uint256 idx, uint256 price) public whenNotPaused onlyOperator {
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
     OneMinOrder storage order = $.oneMinOrders[idx];
     order.closingPrice = price;

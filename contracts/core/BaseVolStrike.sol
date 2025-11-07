@@ -156,7 +156,7 @@ abstract contract BaseVolStrike is
     }
   }
 
-  function settleFilledOrders(uint256 epoch, uint256 size) public onlyOperator returns (uint256) {
+  function settleFilledOrders(uint256 epoch, uint256 size) public whenNotPaused onlyOperator returns (uint256) {
     BaseVolStrikeStorage.Layout storage $ = _getStorage();
     Round storage round = $.rounds[epoch];
 
@@ -202,7 +202,7 @@ abstract contract BaseVolStrike is
 
   function submitFilledOrders(
     FilledOrder[] calldata transactions
-  ) external nonReentrant onlyOperator {
+  ) external nonReentrant whenNotPaused onlyOperator {
     BaseVolStrikeStorage.Layout storage $ = _getStorage();
     if ($.lastFilledOrderId + 1 > transactions[0].idx) revert InvalidId();
 
@@ -869,7 +869,7 @@ abstract contract BaseVolStrike is
     PriceData[] calldata priceData,
     uint64 initDate,
     bool skipSettlement
-  ) external onlyOperator {
+  ) external whenNotPaused onlyOperator {
     if ((initDate - _getStartTimestamp()) % _getIntervalSeconds() != 0) revert InvalidInitDate();
 
     uint256 problemEpoch = _epochAt(initDate);
@@ -914,7 +914,7 @@ abstract contract BaseVolStrike is
     }
   }
 
-  function releaseEpochEscrow(uint256 epoch) external onlyOperator {
+  function releaseEpochEscrow(uint256 epoch) external whenNotPaused onlyOperator {
     BaseVolStrikeStorage.Layout storage $ = _getStorage();
     Round storage round = $.rounds[epoch];
     FilledOrder[] storage orders = $.filledOrders[epoch];
