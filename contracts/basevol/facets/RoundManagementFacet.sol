@@ -164,10 +164,11 @@ contract RoundManagementFacet {
   function releaseEpochEscrow(uint256 epoch) external onlyOperator {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     Round storage round = bvs.rounds[epoch];
+
     FilledOrder[] storage orders = bvs.filledOrders[epoch];
 
     for (uint i = 0; i < orders.length; i++) {
-      FilledOrder memory order = orders[i];
+      FilledOrder storage order = orders[i];
       if (!order.isSettled) {
         if (order.overUser == order.underUser) {
           bvs.clearingHouse.releaseFromEscrow(
@@ -178,6 +179,7 @@ contract RoundManagementFacet {
             100 * order.unit * PRICE_UNIT,
             0
           );
+          order.isSettled = true;
         } else {
           bvs.clearingHouse.releaseFromEscrow(
             address(this),
