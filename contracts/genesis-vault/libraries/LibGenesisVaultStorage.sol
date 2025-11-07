@@ -100,9 +100,11 @@ library LibGenesisVaultStorage {
     bool shutdown; // Vault shutdown state
     bool paused; // Vault paused state
     address clearingHouse; // ClearingHouse contract address authorized for direct deposits
-
-    /* IMPORTANT: Add new variables here to maintain storage layout */
+    // ============ Share Price Validation ============
+    uint256 lastSettledSharePrice; // Last successfully settled share price for deviation checks
   }
+
+  /* IMPORTANT: Add new variables here to maintain storage layout */
 
   /**
    * @notice Returns the Diamond Storage

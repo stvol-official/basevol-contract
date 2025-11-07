@@ -7,18 +7,25 @@ import { LibERC20 } from "../libraries/LibERC20.sol";
 import { IGenesisStrategy } from "../../core/vault/interfaces/IGenesisStrategy.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { IVaultErrors } from "../../errors/VaultErrors.sol";
 
 /**
  * @title SettlementFacet
  * @notice Handles epoch settlement logic for GenesisVault Diamond
  * @dev Called by keepers when BaseVol rounds settle
  */
-contract SettlementFacet {
+contract SettlementFacet is IVaultErrors {
   using Math for uint256;
 
   uint256 internal constant FLOAT_PRECISION = 1e18;
   uint256 internal constant SETTLEMENT_BATCH_SIZE = 50;
   uint256 internal constant MINIMUM_FIRST_DEPOSIT = 1000e6; // 1000 USDC
+
+  // Share price validation constants
+  uint256 internal constant MIN_SHARE_PRICE = 1e3; // 0.001 USDC per share (6 decimals)
+  uint256 internal constant MAX_SHARE_PRICE = 1e12; // 1M USDC per share
+  uint256 internal constant MAX_DEVIATION_BPS = 5000; // 50% maximum deviation
+  uint256 internal constant BPS_DENOMINATOR = 10000;
 
   // ============ Events ============
   event RoundSettled(uint256 indexed epoch, uint256 sharePrice);
@@ -93,9 +100,16 @@ contract SettlementFacet {
       // Calculate share price based on vault's current state
       uint256 sharePrice = _calculateCurrentSharePrice();
 
+      // Validate share price before storing
+      _validateSharePrice(sharePrice);
+
       roundData.sharePrice = sharePrice;
       roundData.isSettled = true;
       roundData.settlementTimestamp = block.timestamp;
+
+      // Update last settled share price for deviation checks
+      s.lastSettledSharePrice = sharePrice;
+
       emit RoundSettled(epoch, sharePrice);
 
       // CRITICAL: Process management fee BEFORE minting new shares
@@ -173,6 +187,45 @@ contract SettlementFacet {
 
     // Share price = (total assets per share) scaled by share decimals
     return (vaultTotalAssets * (10 ** s.decimals)) / vaultTotalSupply;
+  }
+
+  /**
+   * @notice Validate share price before settlement
+   * @dev Checks for zero price, min/max bounds, and deviation from last price
+   * @param sharePrice The calculated share price to validate
+   */
+  function _validateSharePrice(uint256 sharePrice) internal view {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+
+    // Check 1: Share price cannot be zero
+    if (sharePrice == 0) {
+      revert InvalidSharePrice(sharePrice, "Share price cannot be zero");
+    }
+
+    // Check 2: Share price must be within reasonable bounds
+    if (sharePrice < MIN_SHARE_PRICE) {
+      revert InvalidSharePrice(sharePrice, "Share price below minimum");
+    }
+
+    if (sharePrice > MAX_SHARE_PRICE) {
+      revert InvalidSharePrice(sharePrice, "Share price above maximum");
+    }
+
+    // Check 3: Deviation check (if there's a previous price)
+    uint256 lastSharePrice = s.lastSettledSharePrice;
+    if (lastSharePrice > 0) {
+      uint256 deviation;
+
+      if (sharePrice > lastSharePrice) {
+        deviation = ((sharePrice - lastSharePrice) * BPS_DENOMINATOR) / lastSharePrice;
+      } else {
+        deviation = ((lastSharePrice - sharePrice) * BPS_DENOMINATOR) / lastSharePrice;
+      }
+
+      if (deviation > MAX_DEVIATION_BPS) {
+        revert SharePriceDeviationTooHigh(sharePrice, lastSharePrice, deviation);
+      }
+    }
   }
 
   /**
@@ -376,6 +429,11 @@ contract SettlementFacet {
     // SECURITY: Minimum first deposit check (donation attack prevention)
     if (s.totalSupply == 0 && claimableAssets < MINIMUM_FIRST_DEPOSIT) {
       revert("SettlementFacet: First deposit too small");
+    }
+
+    // SECURITY: Additional safety check before division
+    if (roundData.sharePrice == 0) {
+      revert InvalidSharePrice(0, "Cannot process deposit with zero share price");
     }
 
     // Calculate shares to mint using epoch-specific share price
