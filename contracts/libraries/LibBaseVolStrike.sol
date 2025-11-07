@@ -58,6 +58,8 @@ library LibBaseVolStrike {
     mapping(address => CommissionTier) userTiers; // User's tier
     mapping(address => bool) userTierSet; // Whether user tier has been explicitly set
     address[] usersWithTiers; // Array of users who have tiers set
+    // Initialization protection
+    bool initialized; // Prevents re-initialization of base configuration
 
     /* IMPROTANT: you can add new variables here */
   }

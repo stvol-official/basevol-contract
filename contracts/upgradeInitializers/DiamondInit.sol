@@ -18,6 +18,13 @@ import { PriceInfo, CommissionTier } from "../types/Types.sol";
 // of your diamond. Add parameters to the init function if you need to.
 
 contract DiamondInit {
+  // Custom errors for gas efficiency
+  error AlreadyInitialized();
+  error InvalidAddress();
+  error InvalidContract();
+  error InvalidInterval();
+  error InvalidCommissionFee();
+
   // You can add parameters to this function in order to pass in
   // data to set your own state variables
   function init(
@@ -30,6 +37,23 @@ contract DiamondInit {
     uint256 _startTimestamp,
     uint256 _intervalSeconds
   ) external {
+    // Initialize BaseVolStrike storage
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+
+    // CRITICAL: Prevent re-initialization
+    if (bvs.initialized) revert AlreadyInitialized();
+
+    // Validate input parameters
+    _validateInputs(
+      _usdcAddress,
+      _oracleAddress,
+      _adminAddress,
+      _operatorAddress,
+      _commissionfee,
+      _clearingHouseAddress,
+      _intervalSeconds
+    );
+
     // adding ERC165 data
     LibDiamond.DiamondStorage storage ds = LibDiamond.diamondStorage();
     ds.supportedInterfaces[type(IERC165).interfaceId] = true;
@@ -37,9 +61,7 @@ contract DiamondInit {
     ds.supportedInterfaces[type(IDiamondLoupe).interfaceId] = true;
     ds.supportedInterfaces[type(IERC173).interfaceId] = true;
 
-    // Initialize BaseVolStrike storage
-    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-
+    // Initialize storage
     bvs.token = IERC20(_usdcAddress);
     bvs.oracle = IPyth(_oracleAddress);
     bvs.pythLazer = PythLazer(0xACeA761c27A909d4D3895128EBe6370FDE2dF481);
@@ -69,11 +91,45 @@ contract DiamondInit {
 
     bvs.priceIdCount = 2;
 
+    // CRITICAL: Mark as initialized to prevent future re-initialization
+    bvs.initialized = true;
+
     // add your own state variables
     // EIP-2535 specifies that the `diamondCut` function takes two optional
     // arguments: address _init and bytes calldata _calldata
     // These arguments are used to execute an arbitrary function using delegatecall
     // in order to set state variables in the diamond during deployment or an upgrade
     // More info here: https://eips.ethereum.org/EIPS/eip-2535#diamond-interface
+  }
+
+  /// @notice Validates all input parameters for initialization
+  /// @dev Reverts with specific errors if validation fails
+  function _validateInputs(
+    address _usdcAddress,
+    address _oracleAddress,
+    address _adminAddress,
+    address _operatorAddress,
+    uint256 _commissionfee,
+    address _clearingHouseAddress,
+    uint256 _intervalSeconds
+  ) private view {
+    // Validate addresses are not zero
+    if (_usdcAddress == address(0)) revert InvalidAddress();
+    if (_oracleAddress == address(0)) revert InvalidAddress();
+    if (_clearingHouseAddress == address(0)) revert InvalidAddress();
+    if (_adminAddress == address(0)) revert InvalidAddress();
+    if (_operatorAddress == address(0)) revert InvalidAddress();
+
+    // Validate addresses are contracts
+    if (_usdcAddress.code.length == 0) revert InvalidContract();
+    if (_oracleAddress.code.length == 0) revert InvalidContract();
+    if (_clearingHouseAddress.code.length == 0) revert InvalidContract();
+
+    // Validate interval (prevent division by zero)
+    // Min: 60 seconds, Max: 7 days
+    if (_intervalSeconds < 60 || _intervalSeconds > 7 days) revert InvalidInterval();
+
+    // Validate commission fee (max 10% = 1000 basis points)
+    if (_commissionfee > 1000) revert InvalidCommissionFee();
   }
 }
