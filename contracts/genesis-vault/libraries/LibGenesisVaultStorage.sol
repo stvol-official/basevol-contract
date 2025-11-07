@@ -27,6 +27,9 @@ library LibGenesisVaultStorage {
     uint256 sharePrice; // Share price when this epoch was settled (scaled by 1e18)
     bool isSettled; // Whether this epoch has been settled
     uint256 settlementTimestamp; // Timestamp when settlement occurred
+    // Batch processing tracking
+    uint256 processedDepositUserCount; // Number of deposit users processed in batch settlement
+    uint256 processedRedeemUserCount; // Number of redeem users processed in batch settlement
   }
 
   /**

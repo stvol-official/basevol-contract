@@ -16,6 +16,7 @@ contract SettlementFacet {
   using Math for uint256;
 
   uint256 internal constant FLOAT_PRECISION = 1e18;
+  uint256 internal constant SETTLEMENT_BATCH_SIZE = 50;
 
   // ============ Events ============
   event RoundSettled(uint256 indexed epoch, uint256 sharePrice);
@@ -47,6 +48,14 @@ contract SettlementFacet {
     uint256 availableAssets,
     uint256 deficit
   );
+  event BatchSettlementProcessed(
+    uint256 indexed epoch,
+    uint256 depositProcessed,
+    uint256 depositRemaining,
+    uint256 redeemProcessed,
+    uint256 redeemRemaining
+  );
+  event EpochSettlementCompleted(uint256 indexed epoch);
 
   // ============ Custom Errors ============
   error RoundAlreadySettled(uint256 epoch);
@@ -69,32 +78,64 @@ contract SettlementFacet {
 
   /**
    * @notice Called by keeper when a round/epoch settles in BaseVol
+   * @dev Processes users in batches to avoid gas limit issues
    * @param epoch The epoch that was settled
    */
   function onRoundSettled(uint256 epoch) external onlyKeeper {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-
     LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
-    if (roundData.isSettled) {
-      revert RoundAlreadySettled(epoch);
+    // First call: Initialize settlement
+    if (!roundData.isSettled) {
+      // Calculate share price based on vault's current state
+      uint256 sharePrice = _calculateCurrentSharePrice();
+
+      roundData.sharePrice = sharePrice;
+      roundData.isSettled = true;
+      roundData.settlementTimestamp = block.timestamp;
+      emit RoundSettled(epoch, sharePrice);
+
+      // CRITICAL: Process management fee BEFORE minting new shares
+      // This ensures management fee is only charged on shares that existed during the period
+      _mintManagementFeeShares();
+
+      // Withdraw all strategy assets for settlement
+      _withdrawStrategyAssetsForSettlement();
+    } else {
+      // Already settled, check if this is a legacy epoch (upgrade scenario)
+      if (roundData.processedDepositUserCount == 0 && roundData.processedRedeemUserCount == 0) {
+        uint256 totalDepositUsers = s.epochDepositUsers[epoch].length;
+        uint256 totalRedeemUsers = s.epochRedeemUsers[epoch].length;
+
+        // If there are users but counts are 0, this is a legacy epoch already processed
+        // Mark as complete to prevent reprocessing
+        if (totalDepositUsers > 0 || totalRedeemUsers > 0) {
+          roundData.processedDepositUserCount = totalDepositUsers;
+          roundData.processedRedeemUserCount = totalRedeemUsers;
+          emit EpochSettlementCompleted(epoch);
+          return;
+        }
+      }
     }
 
-    // Calculate share price based on vault's current state
-    uint256 sharePrice = _calculateCurrentSharePrice();
+    // Process batch of users
+    (uint256 depositProcessed, uint256 depositRemaining) = _autoProcessEpochDeposits(epoch);
+    (uint256 redeemProcessed, uint256 redeemRemaining) = _autoProcessEpochRedeems(epoch);
 
-    roundData.sharePrice = sharePrice;
-    roundData.isSettled = true;
-    roundData.settlementTimestamp = block.timestamp;
-    emit RoundSettled(epoch, sharePrice);
+    emit BatchSettlementProcessed(
+      epoch,
+      depositProcessed,
+      depositRemaining,
+      redeemProcessed,
+      redeemRemaining
+    );
 
-    // CRITICAL: Process management fee BEFORE minting new shares
-    // This ensures management fee is only charged on shares that existed during the period
-    _mintManagementFeeShares();
-
-    // Process round settlement including liquidity management
-    // This will mint new shares to depositors
-    _processRoundSettlement(epoch);
+    // All users processed
+    if (depositRemaining == 0 && redeemRemaining == 0) {
+      // Signal strategy for idle asset utilization
+      _notifyStrategyForUtilization();
+      emit EpochSettlementCompleted(epoch);
+    }
   }
 
   // ============ Internal Settlement Logic ============
@@ -152,59 +193,6 @@ contract SettlementFacet {
     return totalPending;
   }
 
-  /**
-   * @notice Process epoch settlement including liquidity management
-   */
-  function _processRoundSettlement(uint256 epoch) internal {
-    // 0. Withdraw all strategy assets (BaseVol, Morpho, and idle) for clean accounting
-    _withdrawStrategyAssetsForSettlement();
-
-    // 1. Calculate required assets for redemptions in this epoch
-    uint256 requiredRedeemAssets = _calculateRoundRedeemAssets(epoch);
-
-    // 2. Check current available assets (now includes all withdrawn strategy assets)
-    uint256 availableAssets = LibGenesisVault.idleAssets();
-
-    // 2.1. Verify sufficient balance for settlement
-    // Note: This is a warning check. Individual user processing will also verify balance.
-    if (availableAssets < requiredRedeemAssets) {
-      emit SettlementBalanceWarning(
-        epoch,
-        requiredRedeemAssets,
-        availableAssets,
-        requiredRedeemAssets - availableAssets
-      );
-    }
-
-    // 3. Auto-process all user requests for this epoch
-    _autoProcessEpochRequests(epoch);
-
-    // 4. Signal strategy for idle asset utilization (async)
-    _notifyStrategyForUtilization();
-
-    emit RoundSettlementProcessed(epoch, requiredRedeemAssets, availableAssets);
-  }
-
-  /**
-   * @notice Calculate required assets for redemptions in a specific round
-   */
-  function _calculateRoundRedeemAssets(uint256 epoch) internal view returns (uint256) {
-    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
-
-    if (!roundData.isSettled) return 0;
-
-    uint256 totalRedeemShares = roundData.totalRequestedRedeemShares;
-    uint256 claimedShares = roundData.claimedRedeemShares;
-    uint256 claimableShares = totalRedeemShares > claimedShares
-      ? totalRedeemShares - claimedShares
-      : 0;
-
-    if (claimableShares == 0) return 0;
-
-    // Use round-specific share price for accurate asset calculation
-    return (claimableShares * roundData.sharePrice) / (10 ** s.decimals);
-  }
 
   /**
    * @notice Withdraw all strategy assets (BaseVol, Morpho, and idle) for settlement accounting
@@ -316,36 +304,61 @@ contract SettlementFacet {
     return string(bstr);
   }
 
-  /**
-   * @notice Auto-process all user requests for this epoch
-   */
-  function _autoProcessEpochRequests(uint256 epoch) internal {
-    _autoProcessEpochRedeems(epoch);
-    _autoProcessEpochDeposits(epoch);
-  }
 
   /**
-   * @notice Auto-process deposit requests for an epoch
+   * @notice Auto-process deposit requests for an epoch in batches
+   * @param epoch The epoch to process
+   * @return processed Number of users processed in this batch
+   * @return remaining Number of users remaining to process
    */
-  function _autoProcessEpochDeposits(uint256 epoch) internal {
+  function _autoProcessEpochDeposits(uint256 epoch)
+    internal
+    returns (uint256 processed, uint256 remaining)
+  {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    address[] memory users = s.epochDepositUsers[epoch];
+    LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
-    for (uint256 i = 0; i < users.length; i++) {
+    address[] memory users = s.epochDepositUsers[epoch];
+    uint256 startIndex = roundData.processedDepositUserCount;
+    uint256 endIndex = Math.min(startIndex + SETTLEMENT_BATCH_SIZE, users.length);
+
+    for (uint256 i = startIndex; i < endIndex; i++) {
       _autoProcessUserDeposit(users[i], epoch);
     }
+
+    processed = endIndex - startIndex;
+    roundData.processedDepositUserCount = endIndex;
+    remaining = users.length - endIndex;
+
+    return (processed, remaining);
   }
 
   /**
-   * @notice Auto-process redeem requests for an epoch
+   * @notice Auto-process redeem requests for an epoch in batches
+   * @param epoch The epoch to process
+   * @return processed Number of users processed in this batch
+   * @return remaining Number of users remaining to process
    */
-  function _autoProcessEpochRedeems(uint256 epoch) internal {
+  function _autoProcessEpochRedeems(uint256 epoch)
+    internal
+    returns (uint256 processed, uint256 remaining)
+  {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    address[] memory users = s.epochRedeemUsers[epoch];
+    LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
 
-    for (uint256 i = 0; i < users.length; i++) {
+    address[] memory users = s.epochRedeemUsers[epoch];
+    uint256 startIndex = roundData.processedRedeemUserCount;
+    uint256 endIndex = Math.min(startIndex + SETTLEMENT_BATCH_SIZE, users.length);
+
+    for (uint256 i = startIndex; i < endIndex; i++) {
       _autoProcessUserRedeem(users[i], epoch);
     }
+
+    processed = endIndex - startIndex;
+    roundData.processedRedeemUserCount = endIndex;
+    remaining = users.length - endIndex;
+
+    return (processed, remaining);
   }
 
   /**
@@ -548,5 +561,71 @@ contract SettlementFacet {
     }
 
     return feeAmount;
+  }
+
+  // ============ View Functions ============
+
+  /**
+   * @notice Get remaining settlement count for an epoch
+   * @param epoch The epoch to check
+   * @return remainingDeposits Number of deposit users remaining to process
+   * @return remainingRedeems Number of redeem users remaining to process
+   * @return isComplete Whether settlement is complete
+   */
+  function getRemainingSettlementCount(uint256 epoch)
+    external
+    view
+    returns (uint256 remainingDeposits, uint256 remainingRedeems, bool isComplete)
+  {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
+
+    if (!roundData.isSettled) {
+      return (0, 0, false);
+    }
+
+    uint256 totalDepositUsers = s.epochDepositUsers[epoch].length;
+    uint256 totalRedeemUsers = s.epochRedeemUsers[epoch].length;
+
+    remainingDeposits = totalDepositUsers > roundData.processedDepositUserCount
+      ? totalDepositUsers - roundData.processedDepositUserCount
+      : 0;
+
+    remainingRedeems = totalRedeemUsers > roundData.processedRedeemUserCount
+      ? totalRedeemUsers - roundData.processedRedeemUserCount
+      : 0;
+
+    isComplete = (remainingDeposits == 0 && remainingRedeems == 0);
+
+    return (remainingDeposits, remainingRedeems, isComplete);
+  }
+
+  /**
+   * @notice Get settlement progress for an epoch
+   * @param epoch The epoch to check
+   * @return totalDeposits Total number of deposit users
+   * @return processedDeposits Number of deposit users processed
+   * @return totalRedeems Total number of redeem users
+   * @return processedRedeems Number of redeem users processed
+   */
+  function getSettlementProgress(uint256 epoch)
+    external
+    view
+    returns (
+      uint256 totalDeposits,
+      uint256 processedDeposits,
+      uint256 totalRedeems,
+      uint256 processedRedeems
+    )
+  {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    LibGenesisVaultStorage.RoundData storage roundData = s.roundData[epoch];
+
+    totalDeposits = s.epochDepositUsers[epoch].length;
+    processedDeposits = roundData.processedDepositUserCount;
+    totalRedeems = s.epochRedeemUsers[epoch].length;
+    processedRedeems = roundData.processedRedeemUserCount;
+
+    return (totalDeposits, processedDeposits, totalRedeems, processedRedeems);
   }
 }
