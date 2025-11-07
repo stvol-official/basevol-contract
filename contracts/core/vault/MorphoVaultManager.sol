@@ -47,6 +47,11 @@ contract MorphoVaultManager is
 
   event ConfigUpdated(uint256 maxStrategyDeposit, uint256 minStrategyDeposit);
   event DebugLog(string message);
+  
+  // Security: JIT Approval events
+  event MorphoApprovalGranted(uint256 amount, uint256 timestamp);
+  event MorphoApprovalRevoked(uint256 timestamp);
+  event EmergencyMorphoApprovalRevoked(address indexed caller, uint256 timestamp);
 
   error InsufficientBalance();
   error InvalidAmount();
@@ -86,12 +91,14 @@ contract MorphoVaultManager is
     $.maxStrategyDeposit = 10000000e6; // 10M USDC
     $.minStrategyDeposit = 100e6; // 100 USDC
 
-    // Approve USDC spending for Morpho Vault
-    $.asset.approve(_morphoVault, type(uint256).max);
+    // Security Fix: Remove infinite approval
+    // JIT (Just-In-Time) approval will be used in depositToMorpho()
+    // $.asset.approve(_morphoVault, type(uint256).max); // REMOVED - Security vulnerability
   }
 
   /// @notice Deposits assets from Strategy to Morpho Vault
   /// @dev Strategy must transfer assets to this contract before calling this function
+  /// @dev Security: Uses JIT (Just-In-Time) approval - approves exact amount, revokes after
   /// @param amount The amount of assets to deposit
   function depositToMorpho(
     uint256 amount
@@ -106,7 +113,15 @@ contract MorphoVaultManager is
     uint256 balance = $.asset.balanceOf(address(this));
     if (balance < amount) revert InsufficientBalance();
 
+    // Security Fix: JIT Approval - approve exact amount needed
+    $.asset.approve(address($.morphoVault), amount);
+    emit MorphoApprovalGranted(amount, block.timestamp);
+
     try $.morphoVault.deposit(amount, address(this)) returns (uint256 shares) {
+      // Security Fix: Revoke approval immediately after success
+      $.asset.approve(address($.morphoVault), 0);
+      emit MorphoApprovalRevoked(block.timestamp);
+
       // Update global state
       $.totalDeposited += amount;
       $.totalUtilized += amount;
@@ -117,6 +132,10 @@ contract MorphoVaultManager is
       // Call strategy callback on success
       IGenesisStrategy($.strategy).morphoDepositCompletedCallback(amount, true);
     } catch {
+      // Security Fix: Revoke approval even on failure
+      $.asset.approve(address($.morphoVault), 0);
+      emit MorphoApprovalRevoked(block.timestamp);
+
       // Failure - call strategy callback on failure
       IGenesisStrategy($.strategy).morphoDepositCompletedCallback(amount, false);
       revert("Deposit to Morpho failed");
@@ -337,5 +356,43 @@ contract MorphoVaultManager is
 
   function morphoVault() public view returns (address) {
     return address(MorphoVaultManagerStorage.layout().morphoVault);
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                      SECURITY: APPROVAL MANAGEMENT
+    //////////////////////////////////////////////////////////////*/
+
+  /// @notice Emergency function to revoke Morpho approval
+  /// @dev Only callable by owner in emergency situations
+  function emergencyRevokeMorphoApproval() external onlyOwner {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+    $.asset.approve(address($.morphoVault), 0);
+    emit EmergencyMorphoApprovalRevoked(msg.sender, block.timestamp);
+  }
+
+  /// @notice Gets current Morpho approval amount
+  /// @return Current approval amount (should always be 0 in JIT mode)
+  function getMorphoAllowance() external view returns (uint256) {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+    return $.asset.allowance(address(this), address($.morphoVault));
+  }
+
+  /// @notice Checks if Morpho approval is healthy (should be 0)
+  /// @return isHealthy Whether approval is 0 (healthy state)
+  /// @return currentAllowance Current approval amount
+  /// @return status Human-readable status message
+  function checkMorphoApprovalHealth() external view returns (
+    bool isHealthy,
+    uint256 currentAllowance,
+    string memory status
+  ) {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+    currentAllowance = $.asset.allowance(address(this), address($.morphoVault));
+    
+    // In JIT mode, approval should always be 0
+    isHealthy = (currentAllowance == 0);
+    status = isHealthy ? "HEALTHY" : "WARNING: Non-zero approval detected";
+    
+    return (isHealthy, currentAllowance, status);
   }
 }

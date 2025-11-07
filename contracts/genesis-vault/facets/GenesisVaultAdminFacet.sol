@@ -21,6 +21,9 @@ contract GenesisVaultAdminFacet {
   uint256 private constant MAX_MANAGEMENT_FEE = 5e16; // 5%
   uint256 private constant MAX_PERFORMANCE_FEE = 5e17; // 50%
   uint256 private constant MAX_FIXED_COST = 1000e6; // 1000 USDC (assuming 6 decimals)
+  
+  // Security: Maximum strategy approval limit (1M USDC)
+  uint256 private constant MAX_STRATEGY_APPROVAL = 1_000_000e6;
 
   // ============ Events ============
 
@@ -54,6 +57,12 @@ contract GenesisVaultAdminFacet {
     address indexed oldRecipient,
     address indexed newRecipient
   );
+  
+  // Security: Approval management events
+  event StrategyApprovalGranted(address indexed strategy, uint256 amount);
+  event StrategyApprovalRefreshed(address indexed strategy, uint256 newAmount);
+  event StrategyApprovalRevoked(address indexed strategy);
+  event EmergencyApprovalRevoked(address indexed caller);
 
   // ============ Errors ============
 
@@ -66,6 +75,10 @@ contract GenesisVaultAdminFacet {
   error VaultNotPaused();
   error VaultPaused();
   error TotalSupplyNotZero();
+  
+  // Security: Approval management errors
+  error ExceedsMaxApproval();
+  error NoStrategySet();
 
   // ============ Modifiers ============
 
@@ -107,7 +120,8 @@ contract GenesisVaultAdminFacet {
 
   /**
    * @notice Set strategy contract
-   * @dev Approves new strategy and revokes old strategy approval
+   * @dev Approves new strategy with capped approval and revokes old strategy approval
+   * @dev Security: Uses capped approval (1M USDC max) instead of infinite approval
    * @param _strategy New strategy address
    */
   function setStrategy(address _strategy) external onlyOwner {
@@ -120,6 +134,7 @@ contract GenesisVaultAdminFacet {
     if (prevStrategy != address(0)) {
       IGenesisStrategy(prevStrategy).stop();
       s.asset.approve(prevStrategy, 0);
+      emit StrategyApprovalRevoked(prevStrategy);
     }
 
     // Validate new strategy
@@ -131,7 +146,11 @@ contract GenesisVaultAdminFacet {
     }
 
     s.strategy = _strategy;
-    s.asset.approve(_strategy, type(uint256).max);
+    
+    // Security Fix: Capped approval instead of infinite
+    // s.asset.approve(_strategy, type(uint256).max); // REMOVED - Security vulnerability
+    s.asset.approve(_strategy, MAX_STRATEGY_APPROVAL);
+    emit StrategyApprovalGranted(_strategy, MAX_STRATEGY_APPROVAL);
 
     emit StrategyUpdated(prevStrategy, _strategy);
   }
@@ -321,5 +340,94 @@ contract GenesisVaultAdminFacet {
       s.vaultDepositLimit = vaultLimit;
       emit VaultDepositLimitChanged(msg.sender, oldVaultDepositLimit, vaultLimit);
     }
+  }
+
+  // ============ Security: Approval Management Functions ============
+
+  /// @notice Refreshes strategy approval to a new amount
+  /// @dev Can only be called by owner
+  /// @dev Security: Cannot exceed MAX_STRATEGY_APPROVAL (1M USDC)
+  /// @param newAmount New approval amount (must not exceed MAX_STRATEGY_APPROVAL)
+  function refreshStrategyApproval(uint256 newAmount) external onlyOwner {
+    if (newAmount > MAX_STRATEGY_APPROVAL) revert ExceedsMaxApproval();
+    
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    if (s.strategy == address(0)) revert NoStrategySet();
+    
+    s.asset.approve(s.strategy, newAmount);
+    emit StrategyApprovalRefreshed(s.strategy, newAmount);
+  }
+
+  /// @notice Revokes strategy approval
+  /// @dev Can only be called by owner
+  function revokeStrategyApproval() external onlyOwner {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    if (s.strategy == address(0)) revert NoStrategySet();
+    
+    s.asset.approve(s.strategy, 0);
+    emit StrategyApprovalRevoked(s.strategy);
+  }
+
+  /// @notice Emergency function to revoke all approvals
+  /// @dev Can only be called by owner in emergency situations
+  function emergencyRevokeAllApprovals() external onlyOwner {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    
+    // Revoke strategy approval
+    if (s.strategy != address(0)) {
+      s.asset.approve(s.strategy, 0);
+    }
+    
+    emit EmergencyApprovalRevoked(msg.sender);
+  }
+
+  /// @notice Gets current strategy approval amount
+  /// @return Current approval amount
+  function getStrategyAllowance() external view returns (uint256) {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    if (s.strategy == address(0)) return 0;
+    return s.asset.allowance(address(this), s.strategy);
+  }
+
+  /// @notice Checks if strategy approval is healthy
+  /// @return isHealthy Whether approval is within safe limits
+  /// @return currentAllowance Current approval amount
+  /// @return maxAllowance Maximum allowed approval
+  /// @return utilizationPct Approval utilization percentage (18 decimals)
+  function checkStrategyApprovalHealth() external view returns (
+    bool isHealthy,
+    uint256 currentAllowance,
+    uint256 maxAllowance,
+    uint256 utilizationPct
+  ) {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    
+    if (s.strategy == address(0)) {
+      return (true, 0, MAX_STRATEGY_APPROVAL, 0);
+    }
+    
+    currentAllowance = s.asset.allowance(address(this), s.strategy);
+    maxAllowance = MAX_STRATEGY_APPROVAL;
+    
+    // Calculate utilization percentage
+    if (currentAllowance > 0) {
+      utilizationPct = (currentAllowance * FLOAT_PRECISION) / maxAllowance;
+    } else {
+      utilizationPct = 0;
+    }
+    
+    // Healthy if:
+    // 1. Not infinite approval
+    // 2. Within max limit
+    isHealthy = (currentAllowance != type(uint256).max) && 
+                (currentAllowance <= maxAllowance);
+    
+    return (isHealthy, currentAllowance, maxAllowance, utilizationPct);
+  }
+
+  /// @notice Gets the maximum strategy approval limit
+  /// @return Maximum approval limit (1M USDC)
+  function getMaxStrategyApproval() external pure returns (uint256) {
+    return MAX_STRATEGY_APPROVAL;
   }
 }
