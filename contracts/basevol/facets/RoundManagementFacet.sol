@@ -20,10 +20,12 @@ contract RoundManagementFacet {
   uint256 private constant MAX_PRICE_AGE = 300; // 5 * 60 (5min) - maximum age of price data in seconds
   uint256 private constant MAX_PRICE_DEVIATION_BPS = 5000; // 50% maximum price deviation (basis points)
   uint256 private constant BPS_DENOMINATOR = 10000;
+  uint256 private constant BATCH_SIZE = 250; // Safe batch size for settlement
 
   event StartRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event EndRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event RoundSettled(uint256 indexed epoch, uint256 orderCount, uint256 collectedFee);
+  event RoundPartiallySettled(uint256 indexed epoch, uint256 settledCount, uint256 remainingCount);
 
   modifier onlyOperator() {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
@@ -333,13 +335,30 @@ contract RoundManagementFacet {
 
     if (round.epoch == 0 || round.startTimestamp == 0 || round.endTimestamp == 0) return;
 
-    uint256 collectedFee = 0;
     FilledOrder[] storage orders = bvs.filledOrders[round.epoch];
-    for (uint i = 0; i < orders.length; i++) {
-      FilledOrder storage order = orders[i];
-      collectedFee += LibBaseVolStrike.settleFilledOrder(round, order);
-    }
 
-    emit RoundSettled(round.epoch, orders.length, collectedFee);
+    // If orders are within safe batch size, settle all at once
+    if (orders.length <= BATCH_SIZE) {
+      uint256 collectedFee = 0;
+      for (uint256 i = 0; i < orders.length; i++) {
+        FilledOrder storage order = orders[i];
+        if (!order.isSettled) {
+          collectedFee += LibBaseVolStrike.settleFilledOrder(round, order);
+        }
+      }
+      bvs.isFullySettled[round.epoch] = true;
+      emit RoundSettled(round.epoch, orders.length, collectedFee);
+    } else {
+      // Settle first batch only, remaining batches must be settled manually
+      uint256 collectedFee = 0;
+      for (uint256 i = 0; i < BATCH_SIZE; i++) {
+        FilledOrder storage order = orders[i];
+        if (!order.isSettled) {
+          collectedFee += LibBaseVolStrike.settleFilledOrder(round, order);
+        }
+      }
+      bvs.settledOrderIndex[round.epoch] = BATCH_SIZE;
+      emit RoundPartiallySettled(round.epoch, BATCH_SIZE, orders.length - BATCH_SIZE);
+    }
   }
 }

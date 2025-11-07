@@ -46,6 +46,8 @@ library LibBaseVolStrike {
     uint256 startTimestamp; // Contract start timestamp
     uint256 intervalSeconds; // Round interval in seconds
     PythLazer pythLazer;
+    mapping(uint256 => uint256) settledOrderIndex; // epoch => next order index to settle
+    mapping(uint256 => bool) isFullySettled; // epoch => fully settled flag
     /* IMPROTANT: you can add new variables here */
   }
 

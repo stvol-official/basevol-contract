@@ -12,6 +12,15 @@ contract OrderProcessingFacet is ReentrancyGuard {
   uint256 private constant PRICE_UNIT = 1e6;
   uint256 private constant BASE = 10000; // 100%
 
+  event RoundBatchSettled(
+    uint256 indexed epoch,
+    uint256 settledCount,
+    uint256 remainingCount,
+    uint256 collectedFee
+  );
+
+  event RoundFullySettled(uint256 indexed epoch, uint256 totalOrders, uint256 totalFee);
+
   modifier onlyOperator() {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     require(msg.sender == bvs.operatorAddress, "Only operator");
@@ -83,23 +92,47 @@ contract OrderProcessingFacet is ReentrancyGuard {
 
     FilledOrder[] storage orders = bvs.filledOrders[epoch];
 
-    uint256 endIndex = orders.length;
+    // Get starting index from storage
+    uint256 startIndex = bvs.settledOrderIndex[epoch];
+
+    // Check if already fully settled
+    if (startIndex >= orders.length) {
+      return 0; // No remaining orders
+    }
+
+    // Calculate end index
+    uint256 endIndex = startIndex + size;
+    if (endIndex > orders.length) {
+      endIndex = orders.length;
+    }
+
     uint256 collectedFee = 0;
     uint256 settledCount = 0;
 
-    for (uint i = 0; i < endIndex; i++) {
+    // Settle orders from startIndex to endIndex
+    for (uint256 i = startIndex; i < endIndex; i++) {
       FilledOrder storage order = orders[i];
-      uint256 fee = _settleFilledOrder(round, order);
-      if (fee > 0) {
+
+      // Skip already settled orders
+      if (!order.isSettled) {
+        uint256 fee = _settleFilledOrder(round, order);
+        collectedFee += fee;
         settledCount++;
       }
-      if (settledCount >= size) {
-        break;
-      }
-
-      collectedFee += fee;
     }
 
+    // Update progress in storage
+    bvs.settledOrderIndex[epoch] = endIndex;
+
+    // Emit appropriate event
+    if (endIndex >= orders.length) {
+      bvs.isFullySettled[epoch] = true;
+      emit RoundFullySettled(epoch, orders.length, collectedFee);
+    } else {
+      emit RoundBatchSettled(epoch, settledCount, orders.length - endIndex, collectedFee);
+    }
+
+    // Return remaining orders count
     return orders.length - endIndex;
   }
 
@@ -113,6 +146,27 @@ contract OrderProcessingFacet is ReentrancyGuard {
       }
     }
     return unsettledCount;
+  }
+
+  function getSettlementProgress(
+    uint256 epoch
+  )
+    external
+    view
+    returns (
+      uint256 totalOrders,
+      uint256 settledIndex,
+      uint256 remainingOrders,
+      bool isFullySettled
+    )
+  {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    FilledOrder[] storage orders = bvs.filledOrders[epoch];
+
+    totalOrders = orders.length;
+    settledIndex = bvs.settledOrderIndex[epoch];
+    remainingOrders = totalOrders > settledIndex ? totalOrders - settledIndex : 0;
+    isFullySettled = bvs.isFullySettled[epoch];
   }
 
   function fillSettlementResult(uint256[] calldata epochList) external {
