@@ -17,6 +17,9 @@ contract RoundManagementFacet {
 
   uint256 private constant PRICE_UNIT = 1e6;
   uint256 private constant BUFFER_SECONDS = 600; // 10 * 60 (10min)
+  uint256 private constant MAX_PRICE_AGE = 300; // 5 * 60 (5min) - maximum age of price data in seconds
+  uint256 private constant MAX_PRICE_DEVIATION_BPS = 5000; // 50% maximum price deviation (basis points)
+  uint256 private constant BPS_DENOMINATOR = 10000;
 
   event StartRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event EndRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
@@ -127,6 +130,22 @@ contract RoundManagementFacet {
 
       for (uint i = 0; i < priceData.length; i++) {
         PriceData calldata data = priceData[i];
+
+        // Vector 1: Price validation
+        require(data.price > 0, "Invalid price: must be greater than zero");
+
+        // Check price deviation from start price (if start price exists)
+        uint256 startPrice = problemRound.startPrice[data.productId];
+        if (startPrice > 0) {
+          uint256 deviation;
+          if (data.price > startPrice) {
+            deviation = ((data.price - startPrice) * BPS_DENOMINATOR) / startPrice;
+          } else {
+            deviation = ((startPrice - data.price) * BPS_DENOMINATOR) / startPrice;
+          }
+          require(deviation <= MAX_PRICE_DEVIATION_BPS, "Price deviation exceeds 50%");
+        }
+
         problemRound.endPrice[data.productId] = data.price;
         if (nextRound.epoch <= currentEpochNumber && nextRound.startPrice[data.productId] == 0) {
           nextRound.startPrice[data.productId] = data.price;
@@ -250,9 +269,13 @@ contract RoundManagementFacet {
       payable(msg.sender).transfer(msg.value - verificationFee);
     }
 
-    (, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib.parsePayloadHeader(
-      payload
-    );
+    (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
+      .parsePayloadHeader(payload);
+
+    // Vector 2: Stale oracle check - ensure price data is not too old
+    require(block.timestamp >= publishTime, "Invalid publish time: future timestamp");
+    require(block.timestamp - publishTime <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
+
     if (channel != PythLazerLib.Channel.RealTime) {
       revert LibBaseVolStrike.InvalidChannel();
     }

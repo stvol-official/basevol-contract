@@ -13,7 +13,19 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
 import { BaseVolStrikeStorage } from "../storage/BaseVolStrikeStorage.sol";
-import { Round, FilledOrder, Coupon, WithdrawalRequest, ProductRound, SettlementResult, WinPosition, PriceInfo, PriceUpdateData, PriceLazerData, PriceData } from "../types/Types.sol";
+import {
+  Round,
+  FilledOrder,
+  Coupon,
+  WithdrawalRequest,
+  ProductRound,
+  SettlementResult,
+  WinPosition,
+  PriceInfo,
+  PriceUpdateData,
+  PriceLazerData,
+  PriceData
+} from "../types/Types.sol";
 import { IBaseVolErrors } from "../errors/BaseVolErrors.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
@@ -31,6 +43,8 @@ abstract contract BaseVolStrike is
   uint256 private constant BASE = 10000; // 100%
   uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
   uint256 private constant BUFFER_SECONDS = 600; // 10 * 60 (10min)
+  uint256 private constant MAX_PRICE_AGE = 300; // 5 * 60 (5min) - maximum age of price data in seconds
+  uint256 private constant MAX_PRICE_DEVIATION_BPS = 5000; // 50% maximum price deviation (basis points)
 
   // Abstract functions
   function _getStartTimestamp() internal pure virtual returns (uint256);
@@ -156,7 +170,10 @@ abstract contract BaseVolStrike is
     }
   }
 
-  function settleFilledOrders(uint256 epoch, uint256 size) public whenNotPaused onlyOperator returns (uint256) {
+  function settleFilledOrders(
+    uint256 epoch,
+    uint256 size
+  ) public whenNotPaused onlyOperator returns (uint256) {
     BaseVolStrikeStorage.Layout storage $ = _getStorage();
     Round storage round = $.rounds[epoch];
 
@@ -681,9 +698,13 @@ abstract contract BaseVolStrike is
       payable(msg.sender).transfer(msg.value - verificationFee);
     }
 
-    (, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib.parsePayloadHeader(
-      payload
-    );
+    (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
+      .parsePayloadHeader(payload);
+
+    // Vector 2: Stale oracle check - ensure price data is not too old
+    require(block.timestamp >= publishTime, "Invalid publish time: future timestamp");
+    require(block.timestamp - publishTime <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
+
     if (channel != PythLazerLib.Channel.RealTime) {
       revert InvalidChannel();
     }
@@ -899,6 +920,22 @@ abstract contract BaseVolStrike is
 
       for (uint i = 0; i < priceData.length; i++) {
         PriceData calldata data = priceData[i];
+
+        // Vector 1: Price validation
+        require(data.price > 0, "Invalid price: must be greater than zero");
+
+        // Check price deviation from start price (if start price exists)
+        uint256 startPrice = problemRound.startPrice[data.productId];
+        if (startPrice > 0) {
+          uint256 deviation;
+          if (data.price > startPrice) {
+            deviation = ((data.price - startPrice) * BASE) / startPrice;
+          } else {
+            deviation = ((startPrice - data.price) * BASE) / startPrice;
+          }
+          require(deviation <= MAX_PRICE_DEVIATION_BPS, "Price deviation exceeds 50%");
+        }
+
         problemRound.endPrice[data.productId] = data.price;
         if (nextRound.epoch <= currentEpochNumber && nextRound.startPrice[data.productId] == 0) {
           nextRound.startPrice[data.productId] = data.price;

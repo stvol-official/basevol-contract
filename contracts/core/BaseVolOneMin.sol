@@ -47,6 +47,7 @@ contract BaseVolOneMin is
   uint256 private constant ROUND_DURATION = ROUND_INTERVAL * 2;
   uint256 private constant BUFFER_SECONDS = 5;
   uint256 private constant START_TIMESTAMP = 1750636800; // for epoch
+  uint256 private constant MAX_PRICE_AGE = 300; // 5 * 60 (5min) - maximum age of price data in seconds
 
   event StartRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event EndRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
@@ -600,9 +601,14 @@ contract BaseVolOneMin is
       payable(msg.sender).transfer(msg.value - verificationFee);
     }
 
-    (, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib.parsePayloadHeader(
+    (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib.parsePayloadHeader(
       payload
     );
+    
+    // Vector 2: Stale oracle check - ensure price data is not too old
+    require(block.timestamp >= publishTime, "Invalid publish time: future timestamp");
+    require(block.timestamp - publishTime <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
+    
     if (channel != PythLazerLib.Channel.RealTime) {
       revert InvalidChannel();
     }
