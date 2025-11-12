@@ -5,6 +5,7 @@ import { LibBaseVolStrike } from "../libraries/LibBaseVolStrike.sol";
 import { LibDiamond } from "../libraries/LibDiamond.sol";
 import { FilledOrder, Round, SettlementResult, WinPosition } from "../types/Types.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { EmptyTransactionsArray, InvalidOrderSequence } from "../errors/OrderProcessingErrors.sol";
 
 contract OrderProcessingFacet is ReentrancyGuard {
   using LibBaseVolStrike for LibBaseVolStrike.DiamondStorage;
@@ -21,8 +22,15 @@ contract OrderProcessingFacet is ReentrancyGuard {
   function submitFilledOrders(
     FilledOrder[] calldata transactions
   ) external nonReentrant onlyOperator {
+    // Validate empty array
+    if (transactions.length == 0) revert EmptyTransactionsArray();
+
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    if (bvs.lastFilledOrderId + 1 > transactions[0].idx) revert LibBaseVolStrike.InvalidId();
+
+    // Validate order sequence with improved error message
+    if (bvs.lastFilledOrderId + 1 > transactions[0].idx) {
+      revert InvalidOrderSequence(bvs.lastFilledOrderId, transactions[0].idx);
+    }
 
     for (uint i = 0; i < transactions.length; i++) {
       FilledOrder calldata order = transactions[i];
