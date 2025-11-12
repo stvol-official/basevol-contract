@@ -6,6 +6,8 @@ import { IDiamondCut } from "./interfaces/IDiamondCut.sol";
 
 contract Diamond {
   constructor(address _contractOwner, address _diamondCutFacet) payable {
+    require(_contractOwner != address(0), "Diamond: Owner cannot be zero address");
+    require(_diamondCutFacet != address(0), "Diamond: DiamondCutFacet cannot be zero address");
     LibDiamond.setContractOwner(_contractOwner);
 
     // Add the diamondCut external function from the diamondCutFacet

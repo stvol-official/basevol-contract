@@ -44,6 +44,12 @@ contract OrderProcessingFacet is ReentrancyGuard {
       // This prevents duplicate orders and ensures monotonically increasing IDs
       if (order.idx <= lastId) revert LibBaseVolStrike.InvalidId();
 
+      // Verify price sum equals 100
+      require(
+        order.overPrice + order.underPrice == 100,
+        "OrderProcessing: Price sum must equal 100"
+      );
+
       // Calculate required amounts
       uint256 overAmount = order.overPrice * order.unit * PRICE_UNIT;
       uint256 underAmount = order.underPrice * order.unit * PRICE_UNIT;

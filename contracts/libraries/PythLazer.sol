@@ -43,6 +43,15 @@ contract PythLazer is OwnableUpgradeable, UUPSUpgradeable {
       }
       revert("no such pubkey");
     } else {
+      require(
+        expiresAt > block.timestamp,
+        "PythLazer: Expiration must be in future"
+      );
+      require(
+        expiresAt <= block.timestamp + 365 days,
+        "PythLazer: Expiration too far in future"
+      );
+      
       for (uint8 i = 0; i < trustedSigners.length; i++) {
         if (trustedSigners[i].pubkey == trustedSigner) {
           trustedSigners[i].expiresAt = expiresAt;
