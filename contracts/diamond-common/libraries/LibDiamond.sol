@@ -75,8 +75,8 @@ library LibDiamond {
         revert("LibDiamond: Incorrect FacetCutAction");
       }
     }
-    emit DiamondCut(_diamondCut, _init, _calldata);
     initializeDiamondCut(_init, _calldata);
+    emit DiamondCut(_diamondCut, _init, _calldata);
   }
 
   function addFunctions(address _facetAddress, bytes4[] memory _functionSelectors) internal {

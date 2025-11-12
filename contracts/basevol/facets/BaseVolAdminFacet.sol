@@ -16,8 +16,29 @@ contract AdminFacet {
   uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
 
   event PriceIdAdded(uint256 indexed productId, bytes32 priceId, string symbol);
+  event PriceIdUpdated(
+    uint256 indexed productId,
+    bytes32 oldPriceId,
+    bytes32 newPriceId,
+    string oldSymbol,
+    string newSymbol
+  );
   event CommissionFeeScheduled(uint256 newFee, uint256 currentFee, uint256 timestamp);
   event ETHRetrieved(address indexed admin, uint256 amount);
+  event OracleUpdated(address indexed oldOracle, address indexed newOracle, uint256 timestamp);
+  event LastFilledOrderIdUpdated(uint256 oldId, uint256 newId, uint256 timestamp);
+  event PythLazerUpdated(
+    address indexed oldPythLazer,
+    address indexed newPythLazer,
+    uint256 timestamp
+  );
+  event OperatorUpdated(
+    address indexed oldOperator,
+    address indexed newOperator,
+    uint256 timestamp
+  );
+  event AdminUpdated(address indexed oldAdmin, address indexed newAdmin, uint256 timestamp);
+  event TokenUpdated(address indexed oldToken, address indexed newToken, uint256 timestamp);
 
   modifier onlyOwner() {
     LibDiamond.enforceIsContractOwner();
@@ -48,7 +69,9 @@ contract AdminFacet {
   function setPythLazer(address _pythLazer) external onlyAdmin {
     if (_pythLazer == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    address oldPythLazer = address(bvs.pythLazer);
     bvs.pythLazer = PythLazer(_pythLazer);
+    emit PythLazerUpdated(oldPythLazer, _pythLazer, block.timestamp);
   }
 
   function retrieveMisplacedETH() external onlyAdmin {
@@ -72,13 +95,17 @@ contract AdminFacet {
   function setOperator(address _operatorAddress) external onlyAdmin {
     if (_operatorAddress == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    address oldOperator = bvs.operatorAddress;
     bvs.operatorAddress = _operatorAddress;
+    emit OperatorUpdated(oldOperator, _operatorAddress, block.timestamp);
   }
 
   function setOracle(address _oracle) external onlyAdmin {
     if (_oracle == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    address oldOracle = address(bvs.oracle);
     bvs.oracle = IPyth(_oracle);
+    emit OracleUpdated(oldOracle, _oracle, block.timestamp);
   }
 
   function setCommissionfee(uint256 _commissionfee) external onlyAdmin {
@@ -94,13 +121,17 @@ contract AdminFacet {
   function setAdmin(address _adminAddress) external onlyOwner {
     if (_adminAddress == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    address oldAdmin = bvs.adminAddress;
     bvs.adminAddress = _adminAddress;
+    emit AdminUpdated(oldAdmin, _adminAddress, block.timestamp);
   }
 
   function setToken(address _token) external onlyAdmin {
     if (_token == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    address oldToken = address(bvs.token);
     bvs.token = IERC20(_token);
+    emit TokenUpdated(oldToken, _token, block.timestamp);
   }
 
   function setLastFilledOrderId(uint256 _lastFilledOrderId) external onlyOperator {
@@ -109,7 +140,9 @@ contract AdminFacet {
     // Ensure order ID only moves forward to prevent collision
     require(_lastFilledOrderId >= bvs.lastFilledOrderId, "Order ID can only increase");
 
+    uint256 oldId = bvs.lastFilledOrderId;
     bvs.lastFilledOrderId = _lastFilledOrderId;
+    emit LastFilledOrderIdUpdated(oldId, _lastFilledOrderId, block.timestamp);
   }
 
   function addPriceId(
@@ -143,14 +176,34 @@ contract AdminFacet {
       }
     }
 
-    if (oldPriceId != bytes32(0)) {
+    // Check if this is an update or new addition
+    bool isUpdate = (oldPriceId != bytes32(0));
+
+    if (isUpdate) {
+      // Store old symbol before updating
+      string memory oldSymbol = bvs.priceInfos[priceInfo.productId].symbol;
+
+      // Delete old priceId mapping
       delete bvs.priceIdToProductId[oldPriceId];
+
+      // Update to new values
+      bvs.priceInfos[priceInfo.productId] = priceInfo;
+      bvs.priceIdToProductId[priceInfo.priceId] = priceInfo.productId;
+
+      emit PriceIdUpdated(
+        priceInfo.productId,
+        oldPriceId,
+        priceInfo.priceId,
+        oldSymbol,
+        priceInfo.symbol
+      );
+    } else {
+      // New addition
+      bvs.priceInfos[priceInfo.productId] = priceInfo;
+      bvs.priceIdToProductId[priceInfo.priceId] = priceInfo.productId;
+
+      emit PriceIdAdded(priceInfo.productId, priceInfo.priceId, priceInfo.symbol);
     }
-
-    bvs.priceInfos[priceInfo.productId] = priceInfo;
-    bvs.priceIdToProductId[priceInfo.priceId] = priceInfo.productId;
-
-    emit PriceIdAdded(priceInfo.productId, priceInfo.priceId, priceInfo.symbol);
   }
 
   // Internal helper functions
