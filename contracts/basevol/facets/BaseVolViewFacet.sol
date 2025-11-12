@@ -19,6 +19,8 @@ contract ViewFacet {
   }
 
   function balances(address user) public view returns (uint256, uint256, uint256) {
+    require(user != address(0), "ViewFacet: User address cannot be zero");
+    
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     uint256 depositBalance = bvs.clearingHouse.userBalances(user);
     uint256 couponBalance = bvs.clearingHouse.couponBalanceOf(user);
@@ -28,6 +30,14 @@ contract ViewFacet {
 
   function rounds(uint256 epoch, uint256 productId) public view returns (ProductRound memory) {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    
+    // Validate epoch
+    uint256 currentEpoch = _getCurrentEpoch();
+    require(epoch <= currentEpoch, "ViewFacet: Invalid epoch");
+    
+    // Validate productId
+    require(productId < bvs.priceIdCount, "ViewFacet: Invalid product ID");
+    
     Round storage round = bvs.rounds[epoch];
     if (round.epoch == 0) {
       (uint256 startTime, uint256 endTime) = _epochTimes(epoch);
@@ -57,6 +67,10 @@ contract ViewFacet {
   }
 
   function filledOrders(uint256 epoch) public view returns (FilledOrder[] memory) {
+    // Validate epoch
+    uint256 currentEpoch = _getCurrentEpoch();
+    require(epoch <= currentEpoch, "ViewFacet: Invalid epoch");
+    
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     return bvs.filledOrders[epoch];
   }
@@ -66,6 +80,14 @@ contract ViewFacet {
     uint256 chunkSize,
     uint256 offset
   ) public view returns (FilledOrder[] memory, SettlementResult[] memory) {
+    // Validate epoch
+    uint256 currentEpoch = _getCurrentEpoch();
+    require(epoch <= currentEpoch, "ViewFacet: Invalid epoch");
+    
+    // Validate chunkSize
+    require(chunkSize > 0, "ViewFacet: Chunk size must be greater than zero");
+    require(chunkSize <= 1000, "ViewFacet: Chunk size too large");
+    
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     FilledOrder[] memory orders = bvs.filledOrders[epoch];
     if (offset >= orders.length) {
@@ -88,6 +110,13 @@ contract ViewFacet {
     uint256 epoch,
     address user
   ) public view returns (FilledOrder[] memory) {
+    // Validate epoch
+    uint256 currentEpoch = _getCurrentEpoch();
+    require(epoch <= currentEpoch, "ViewFacet: Invalid epoch");
+    
+    // Validate user address
+    require(user != address(0), "ViewFacet: User address cannot be zero");
+    
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     FilledOrder[] storage orders = bvs.filledOrders[epoch];
     uint cnt = 0;
@@ -138,6 +167,12 @@ contract ViewFacet {
   function _getIntervalSeconds() internal view returns (uint256) {
     LibBaseVolStrike.DiamondStorage storage ds = LibBaseVolStrike.diamondStorage();
     return ds.intervalSeconds;
+  }
+
+  function _getCurrentEpoch() internal view returns (uint256) {
+    if (block.timestamp < _getStartTimestamp()) return 0;
+    uint256 elapsedSeconds = block.timestamp - _getStartTimestamp();
+    return elapsedSeconds / _getIntervalSeconds();
   }
 
   function _epochTimes(uint256 epoch) internal view returns (uint256 startTime, uint256 endTime) {
