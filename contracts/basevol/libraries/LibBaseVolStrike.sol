@@ -393,6 +393,7 @@ library LibBaseVolStrike {
   // Import all necessary errors from BaseVolErrors
   error InvalidAddress();
   error InvalidCommissionFee();
+  error InvalidRedeemFee();
   error InvalidInitDate();
   error InvalidRound();
   error InvalidRoundPrice();

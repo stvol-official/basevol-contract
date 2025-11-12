@@ -16,6 +16,7 @@ contract RedemptionFacet {
 
   uint256 private constant PRICE_UNIT = 1e6;
   uint256 private constant BASE = 10000; // 100%
+  uint256 private constant MAX_REDEEM_FEE = 1000; // Max 10% (1000 basis points)
 
   event RedeemPairsEvent(
     uint256 idx,
@@ -38,6 +39,8 @@ contract RedemptionFacet {
     uint256 strike,
     uint256 unit
   );
+
+  event RedeemFeeUpdated(uint256 oldFee, uint256 newFee, uint256 timestamp);
 
   modifier onlyOperator() {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
@@ -214,8 +217,14 @@ contract RedemptionFacet {
   }
 
   function setRedeemFee(uint256 _redeemFee) external onlyAdmin {
+    if (_redeemFee > MAX_REDEEM_FEE) revert LibBaseVolStrike.InvalidRedeemFee();
+
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+
+    uint256 oldFee = bvs.redeemFee;
     bvs.redeemFee = _redeemFee;
+
+    emit RedeemFeeUpdated(oldFee, _redeemFee, block.timestamp);
   }
 
   function setRedeemVault(address _redeemVault) external onlyAdmin {
