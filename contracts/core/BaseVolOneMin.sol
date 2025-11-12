@@ -70,6 +70,9 @@ contract BaseVolOneMin is
 
   event DebugLog(string message);
   event PriceIdAdded(uint256 indexed productId, bytes32 priceId, string symbol);
+  event ETHRetrieved(address indexed admin, uint256 amount);
+  event OracleRefundFailed(address indexed user, uint256 amount);
+  event OracleRefundSucceeded(address indexed user, uint256 amount);
 
   modifier onlyAdmin() {
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
@@ -472,7 +475,13 @@ contract BaseVolOneMin is
 
   function retrieveMisplacedETH() external onlyAdmin {
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
-    payable($.adminAddress).transfer(address(this).balance);
+    uint256 balance = address(this).balance;
+    require(balance > 0, "No ETH to retrieve");
+
+    (bool success, ) = payable($.adminAddress).call{value: balance}("");
+    require(success, "ETH transfer failed");
+
+    emit ETHRetrieved($.adminAddress, balance);
   }
 
   function retrieveMisplacedTokens(address _token) external onlyAdmin {
@@ -597,8 +606,15 @@ contract BaseVolOneMin is
     (bytes memory payload, ) = $.pythLazer.verifyUpdate{ value: verificationFee }(
       priceLazerData.priceData
     );
-    if (msg.value > verificationFee) {
-      payable(msg.sender).transfer(msg.value - verificationFee);
+    
+    uint256 excessAmount = msg.value - verificationFee;
+    if (excessAmount > 0) {
+      (bool success, ) = payable(msg.sender).call{value: excessAmount}("");
+      if (!success) {
+        emit OracleRefundFailed(msg.sender, excessAmount);
+      } else {
+        emit OracleRefundSucceeded(msg.sender, excessAmount);
+      }
     }
 
     (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib

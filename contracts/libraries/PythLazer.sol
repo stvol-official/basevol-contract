@@ -10,6 +10,9 @@ contract PythLazer is OwnableUpgradeable, UUPSUpgradeable {
   uint256 public verification_fee;
   mapping(address => uint256) trustedSignerToExpiresAtMapping;
 
+  event RefundFailed(address indexed user, uint256 amount);
+  event RefundSucceeded(address indexed user, uint256 amount);
+
   constructor() {
     _disableInitializers();
   }
@@ -69,8 +72,15 @@ contract PythLazer is OwnableUpgradeable, UUPSUpgradeable {
   ) external payable returns (bytes calldata payload, address signer) {
     // Require fee and refund excess
     require(msg.value >= verification_fee, "Insufficient fee provided");
-    if (msg.value > verification_fee) {
-      payable(msg.sender).transfer(msg.value - verification_fee);
+    
+    uint256 excessAmount = msg.value - verification_fee;
+    if (excessAmount > 0) {
+      (bool success, ) = payable(msg.sender).call{value: excessAmount}("");
+      if (!success) {
+        emit RefundFailed(msg.sender, excessAmount);
+      } else {
+        emit RefundSucceeded(msg.sender, excessAmount);
+      }
     }
 
     if (update.length < 71) {

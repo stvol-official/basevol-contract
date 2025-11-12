@@ -99,6 +99,7 @@ contract ClearingHouse is
     string reason,
     uint256 timestamp
   );
+  event ETHRetrieved(address indexed admin, uint256 amount);
 
   modifier onlyAdmin() {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
@@ -404,7 +405,13 @@ contract ClearingHouse is
 
   function retrieveMisplacedETH() external onlyAdmin {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
-    payable($.adminAddress).transfer(address(this).balance);
+    uint256 balance = address(this).balance;
+    require(balance > 0, "No ETH to retrieve");
+
+    (bool success, ) = payable($.adminAddress).call{value: balance}("");
+    require(success, "ETH transfer failed");
+
+    emit ETHRetrieved($.adminAddress, balance);
   }
 
   function retrieveMisplacedTokens(address _token) external onlyAdmin {

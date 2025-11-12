@@ -17,6 +17,7 @@ contract AdminFacet {
 
   event PriceIdAdded(uint256 indexed productId, bytes32 priceId, string symbol);
   event CommissionFeeScheduled(uint256 newFee, uint256 currentFee, uint256 timestamp);
+  event ETHRetrieved(address indexed admin, uint256 amount);
 
   modifier onlyOwner() {
     LibDiamond.enforceIsContractOwner();
@@ -52,7 +53,13 @@ contract AdminFacet {
 
   function retrieveMisplacedETH() external onlyAdmin {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    payable(bvs.adminAddress).transfer(address(this).balance);
+    uint256 balance = address(this).balance;
+    require(balance > 0, "No ETH to retrieve");
+
+    (bool success, ) = payable(bvs.adminAddress).call{ value: balance }("");
+    require(success, "ETH transfer failed");
+
+    emit ETHRetrieved(bvs.adminAddress, balance);
   }
 
   function retrieveMisplacedTokens(address _token) external onlyAdmin {
@@ -98,13 +105,10 @@ contract AdminFacet {
 
   function setLastFilledOrderId(uint256 _lastFilledOrderId) external onlyOperator {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    
+
     // Ensure order ID only moves forward to prevent collision
-    require(
-      _lastFilledOrderId >= bvs.lastFilledOrderId,
-      "Order ID can only increase"
-    );
-    
+    require(_lastFilledOrderId >= bvs.lastFilledOrderId, "Order ID can only increase");
+
     bvs.lastFilledOrderId = _lastFilledOrderId;
   }
 

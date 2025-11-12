@@ -19,6 +19,7 @@ contract AdminFacet {
   event TierCommissionRateSet(CommissionTier indexed tier, uint256 rate);
   event UserTierSet(address indexed user, CommissionTier tier);
   event UserTierRemoved(address indexed user);
+  event ETHRetrieved(address indexed admin, uint256 amount);
 
   modifier onlyOwner() {
     LibDiamond.enforceIsContractOwner();
@@ -54,7 +55,13 @@ contract AdminFacet {
 
   function retrieveMisplacedETH() external onlyAdmin {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    payable(bvs.adminAddress).transfer(address(this).balance);
+    uint256 balance = address(this).balance;
+    require(balance > 0, "No ETH to retrieve");
+
+    (bool success, ) = payable(bvs.adminAddress).call{value: balance}("");
+    require(success, "ETH transfer failed");
+
+    emit ETHRetrieved(bvs.adminAddress, balance);
   }
 
   function retrieveMisplacedTokens(address _token) external onlyAdmin {

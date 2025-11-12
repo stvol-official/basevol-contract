@@ -24,6 +24,8 @@ contract RoundManagementFacet {
   event StartRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event EndRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event RoundSettled(uint256 indexed epoch, uint256 orderCount, uint256 collectedFee);
+  event OracleRefundFailed(address indexed user, uint256 amount);
+  event OracleRefundSucceeded(address indexed user, uint256 amount);
 
   modifier onlyOperator() {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
@@ -266,8 +268,15 @@ contract RoundManagementFacet {
     (bytes memory payload, ) = bvs.pythLazer.verifyUpdate{ value: verificationFee }(
       priceLazerData.priceData
     );
-    if (msg.value > verificationFee) {
-      payable(msg.sender).transfer(msg.value - verificationFee);
+    
+    uint256 excessAmount = msg.value - verificationFee;
+    if (excessAmount > 0) {
+      (bool success, ) = payable(msg.sender).call{value: excessAmount}("");
+      if (!success) {
+        emit OracleRefundFailed(msg.sender, excessAmount);
+      } else {
+        emit OracleRefundSucceeded(msg.sender, excessAmount);
+      }
     }
 
     (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
