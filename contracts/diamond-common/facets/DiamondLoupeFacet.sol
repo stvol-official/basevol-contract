@@ -6,54 +6,114 @@ import { IDiamondLoupe } from "../interfaces/IDiamondLoupe.sol";
 import { IERC165 } from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 contract DiamondLoupeFacet is IDiamondLoupe, IERC165 {
-  /// @notice Gets all facets and their selectors.
-  /// @return facets_ Facet
-  function facets() external view override returns (Facet[] memory facets_) {
+  /// @notice Gets facets with pagination support
+  /// @param startIndex Starting selector index
+  /// @param maxResults Maximum number of selectors to process
+  /// @return facets_ Facet array
+  /// @return totalSelectors Total number of selectors
+  /// @return nextIndex Next page start index (0 if last page)
+  function facetsPaginated(
+    uint256 startIndex,
+    uint256 maxResults
+  ) 
+    external 
+    view 
+    returns (
+      Facet[] memory facets_,
+      uint256 totalSelectors,
+      uint256 nextIndex
+    ) 
+  {
+    require(maxResults > 0 && maxResults <= 200, "Invalid page size");
+    
     LibDiamond.DiamondStorage storage ds = LibDiamond.diamondStorage();
-    uint256 numFacets = ds.selectors.length;
-    facets_ = new Facet[](numFacets);
-    uint256[] memory numFacetSelectors = new uint256[](numFacets);
-    uint256 numFacetsIndex = 0;
-
-    for (uint256 selectorIndex; selectorIndex < numFacets; selectorIndex++) {
-      bytes4 selector = ds.selectors[selectorIndex];
+    totalSelectors = ds.selectors.length;
+    
+    // Return empty if start index is out of bounds
+    if (startIndex >= totalSelectors) {
+      return (new Facet[](0), totalSelectors, 0);
+    }
+    
+    // Calculate end index
+    uint256 endIndex = startIndex + maxResults;
+    if (endIndex > totalSelectors) {
+      endIndex = totalSelectors;
+    }
+    
+    // Temporary array to track unique facets
+    address[] memory uniqueFacets = new address[](endIndex - startIndex);
+    uint256 uniqueCount = 0;
+    
+    // First pass: collect unique facet addresses
+    for (uint256 i = startIndex; i < endIndex; i++) {
+      bytes4 selector = ds.selectors[i];
       address facetAddress_ = ds.facetAddressAndSelectorPosition[selector].facetAddress;
-      bool continueLoop = false;
-
-      for (uint256 facetIndex; facetIndex < numFacetsIndex; facetIndex++) {
-        if (facets_[facetIndex].facetAddress == facetAddress_) {
-          facets_[facetIndex].functionSelectors[numFacetSelectors[facetIndex]] = selector;
-          numFacetSelectors[facetIndex]++;
-          continueLoop = true;
+      
+      // Check for duplicates
+      bool isDuplicate = false;
+      for (uint256 j = 0; j < uniqueCount; j++) {
+        if (uniqueFacets[j] == facetAddress_) {
+          isDuplicate = true;
           break;
         }
       }
-
-      if (continueLoop) {
-        continue;
+      
+      if (!isDuplicate) {
+        uniqueFacets[uniqueCount] = facetAddress_;
+        uniqueCount++;
       }
-
-      facets_[numFacetsIndex].facetAddress = facetAddress_;
-      facets_[numFacetsIndex].functionSelectors = new bytes4[](numFacets);
-      facets_[numFacetsIndex].functionSelectors[0] = selector;
-      numFacetSelectors[numFacetsIndex] = 1;
-      numFacetsIndex++;
     }
-
-    for (uint256 facetIndex; facetIndex < numFacetsIndex; facetIndex++) {
-      uint256 numSelectors = numFacetSelectors[facetIndex];
-      bytes4[] memory selectors = facets_[facetIndex].functionSelectors;
-
-      // setting the number of selectors
+    
+    // Create facets array
+    facets_ = new Facet[](uniqueCount);
+    uint256[] memory selectorCounts = new uint256[](uniqueCount);
+    
+    // Initialize facets
+    for (uint256 i = 0; i < uniqueCount; i++) {
+      facets_[i].facetAddress = uniqueFacets[i];
+      facets_[i].functionSelectors = new bytes4[](endIndex - startIndex);
+    }
+    
+    // Second pass: collect selectors
+    for (uint256 i = startIndex; i < endIndex; i++) {
+      bytes4 selector = ds.selectors[i];
+      address facetAddress_ = ds.facetAddressAndSelectorPosition[selector].facetAddress;
+      
+      // Find facet index
+      for (uint256 j = 0; j < uniqueCount; j++) {
+        if (uniqueFacets[j] == facetAddress_) {
+          facets_[j].functionSelectors[selectorCounts[j]] = selector;
+          selectorCounts[j]++;
+          break;
+        }
+      }
+    }
+    
+    // Resize selector arrays
+    for (uint256 i = 0; i < uniqueCount; i++) {
+      bytes4[] memory selectors = facets_[i].functionSelectors;
       assembly {
-        mstore(selectors, numSelectors)
+        mstore(selectors, mload(add(selectorCounts, mul(add(i, 1), 0x20))))
       }
     }
+    
+    // Calculate next index
+    nextIndex = endIndex < totalSelectors ? endIndex : 0;
+    
+    return (facets_, totalSelectors, nextIndex);
+  }
 
-    // setting the number of facets
-    assembly {
-      mstore(facets_, numFacetsIndex)
-    }
+  /// @notice Gets all facets and their selectors (backward compatible, limited to 200 selectors)
+  /// @return facets_ Facet
+  function facets() external view override returns (Facet[] memory facets_) {
+    LibDiamond.DiamondStorage storage ds = LibDiamond.diamondStorage();
+    uint256 numSelectors = ds.selectors.length;
+    
+    // Protect against gas limit with large selector count
+    require(numSelectors <= 200, "Too many selectors, use facetsPaginated");
+    
+    (facets_,,) = this.facetsPaginated(0, numSelectors);
+    return facets_;
   }
 
   /// @notice Gets all the function selectors supported by a specific facet.
@@ -126,6 +186,13 @@ contract DiamondLoupeFacet is IDiamondLoupe, IERC165 {
   ) external view override returns (address facetAddress_) {
     LibDiamond.DiamondStorage storage ds = LibDiamond.diamondStorage();
     facetAddress_ = ds.facetAddressAndSelectorPosition[_functionSelector].facetAddress;
+  }
+
+  /// @notice Get total number of selectors
+  /// @return count The selector count
+  function selectorCount() external view returns (uint256 count) {
+    LibDiamond.DiamondStorage storage ds = LibDiamond.diamondStorage();
+    return ds.selectors.length;
   }
 
   /// @notice Query if a contract implements an interface

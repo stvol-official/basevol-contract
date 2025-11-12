@@ -84,30 +84,119 @@ contract ViewFacet {
     return (chunkedOrders, chunkedResults);
   }
 
-  function userFilledOrders(
+  /// @notice Get user's filled orders with pagination support
+  /// @param epoch The epoch to query
+  /// @param user The user address
+  /// @param startIndex Starting index in the orders array
+  /// @param maxResults Maximum number of orders to process
+  /// @return userOrders Array of user's orders
+  /// @return totalOrders Total number of orders in the epoch
+  /// @return nextIndex Next page start index (0 if last page)
+  function userFilledOrdersPaginated(
     uint256 epoch,
-    address user
-  ) public view returns (FilledOrder[] memory) {
+    address user,
+    uint256 startIndex,
+    uint256 maxResults
+  ) 
+    public 
+    view 
+    returns (
+      FilledOrder[] memory userOrders,
+      uint256 totalOrders,
+      uint256 nextIndex
+    ) 
+  {
+    require(maxResults > 0 && maxResults <= 200, "Invalid page size");
+    require(user != address(0), "Invalid user address");
+    
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     FilledOrder[] storage orders = bvs.filledOrders[epoch];
-    uint cnt = 0;
-    for (uint i = 0; i < orders.length; i++) {
+    totalOrders = orders.length;
+    
+    // Return empty if start index is out of bounds
+    if (startIndex >= totalOrders) {
+      return (new FilledOrder[](0), totalOrders, 0);
+    }
+    
+    // Calculate end index
+    uint256 endIndex = startIndex + maxResults;
+    if (endIndex > totalOrders) {
+      endIndex = totalOrders;
+    }
+    
+    // First pass: count user orders in this page
+    uint256 userOrderCount = 0;
+    for (uint256 i = startIndex; i < endIndex; i++) {
       FilledOrder storage order = orders[i];
       if (order.overUser == user || order.underUser == user) {
-        cnt++;
+        userOrderCount++;
       }
     }
-    FilledOrder[] memory userOrders = new FilledOrder[](cnt);
-    uint idx = 0;
-    for (uint i = 0; i < orders.length; i++) {
+    
+    // Second pass: collect user orders
+    userOrders = new FilledOrder[](userOrderCount);
+    uint256 idx = 0;
+    for (uint256 i = startIndex; i < endIndex; i++) {
       FilledOrder storage order = orders[i];
       if (order.overUser == user || order.underUser == user) {
         userOrders[idx] = order;
         idx++;
       }
     }
+    
+    // Calculate next index
+    nextIndex = endIndex < totalOrders ? endIndex : 0;
+    
+    return (userOrders, totalOrders, nextIndex);
+  }
 
-    return userOrders;
+  /// @notice Get user's filled orders (backward compatible, limited to 100 orders)
+  /// @param epoch The epoch to query
+  /// @param user The user address
+  /// @return User's filled orders (max 100 orders processed)
+  function userFilledOrders(
+    uint256 epoch,
+    address user
+  ) public view returns (FilledOrder[] memory) {
+    (FilledOrder[] memory orders,,) = userFilledOrdersPaginated(epoch, user, 0, 100);
+    return orders;
+  }
+
+  /// @notice Get count of user's filled orders in an epoch
+  /// @param epoch The epoch to query
+  /// @param user The user address
+  /// @return count Number of user's orders
+  function userFilledOrderCount(
+    uint256 epoch,
+    address user
+  ) external view returns (uint256 count) {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    FilledOrder[] storage orders = bvs.filledOrders[epoch];
+    
+    for (uint256 i = 0; i < orders.length; i++) {
+      FilledOrder storage order = orders[i];
+      if (order.overUser == user || order.underUser == user) {
+        count++;
+      }
+    }
+    
+    return count;
+  }
+
+  /// @notice Get filled order by index
+  /// @param epoch The epoch to query
+  /// @param orderIndex The order index
+  /// @return order The filled order
+  function getFilledOrderByIndex(
+    uint256 epoch,
+    uint256 orderIndex
+  ) external view returns (FilledOrder memory order) {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    FilledOrder[] storage orders = bvs.filledOrders[epoch];
+    
+    require(orderIndex < orders.length, "Invalid order index");
+    
+    return orders[orderIndex];
   }
 
   function lastFilledOrderId() public view returns (uint256) {
@@ -120,13 +209,75 @@ contract ViewFacet {
     return bvs.lastSettledFilledOrderId;
   }
 
-  function priceInfos() external view returns (PriceInfo[] memory) {
+  /// @notice Get price infos with pagination support
+  /// @param startIndex Starting index
+  /// @param maxResults Maximum number of results
+  /// @return priceInfoArray Array of price infos
+  /// @return totalCount Total number of price infos
+  /// @return nextIndex Next page start index (0 if last page)
+  function priceInfosPaginated(
+    uint256 startIndex,
+    uint256 maxResults
+  ) 
+    external 
+    view 
+    returns (
+      PriceInfo[] memory priceInfoArray,
+      uint256 totalCount,
+      uint256 nextIndex
+    ) 
+  {
+    require(maxResults > 0 && maxResults <= 100, "Invalid page size");
+    
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    PriceInfo[] memory priceInfoArray = new PriceInfo[](bvs.priceIdCount);
-    for (uint256 i = 0; i < bvs.priceIdCount; i++) {
-      priceInfoArray[i] = bvs.priceInfos[i];
+    totalCount = bvs.priceIdCount;
+    
+    // Return empty if start index is out of bounds
+    if (startIndex >= totalCount) {
+      return (new PriceInfo[](0), totalCount, 0);
     }
-    return priceInfoArray;
+    
+    // Calculate end index
+    uint256 endIndex = startIndex + maxResults;
+    if (endIndex > totalCount) {
+      endIndex = totalCount;
+    }
+    
+    // Create result array
+    uint256 resultCount = endIndex - startIndex;
+    priceInfoArray = new PriceInfo[](resultCount);
+    
+    for (uint256 i = 0; i < resultCount; i++) {
+      priceInfoArray[i] = bvs.priceInfos[startIndex + i];
+    }
+    
+    // Calculate next index
+    nextIndex = endIndex < totalCount ? endIndex : 0;
+    
+    return (priceInfoArray, totalCount, nextIndex);
+  }
+
+  /// @notice Get all price infos (backward compatible, limited to 50)
+  /// @return Array of price infos (max 50)
+  function priceInfos() external view returns (PriceInfo[] memory) {
+    (PriceInfo[] memory infos,,) = this.priceInfosPaginated(0, 50);
+    return infos;
+  }
+
+  /// @notice Get price info by product ID
+  /// @param productId The product ID
+  /// @return info The price info
+  function getPriceInfo(uint256 productId) external view returns (PriceInfo memory info) {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    require(productId < bvs.priceIdCount, "Invalid product ID");
+    return bvs.priceInfos[productId];
+  }
+
+  /// @notice Get total number of price infos
+  /// @return count The count
+  function priceInfoCount() external view returns (uint256 count) {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    return bvs.priceIdCount;
   }
 
   // Internal functions
