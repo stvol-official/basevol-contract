@@ -10,7 +10,18 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { ClearingHouseStorage } from "../storage/ClearingHouseStorage.sol";
 import { ICommonErrors } from "../errors/CommonErrors.sol";
-import { WithdrawalRequest, ForceWithdrawalRequest, Coupon, BatchWithdrawRequest, CouponUsageDetail, WinPosition, WithdrawalInfo, TimeUnit, Product, ProductInfo } from "../types/Types.sol";
+import {
+  WithdrawalRequest,
+  ForceWithdrawalRequest,
+  Coupon,
+  BatchWithdrawRequest,
+  CouponUsageDetail,
+  WinPosition,
+  WithdrawalInfo,
+  TimeUnit,
+  Product,
+  ProductInfo
+} from "../types/Types.sol";
 import { IClearingHouseErrors } from "../errors/ClearingHouseErrors.sol";
 import { IVaultManager } from "../interfaces/IVaultManager.sol";
 import { IGenesisVault } from "../interfaces/IGenesisVault.sol";
@@ -471,16 +482,52 @@ contract ClearingHouse is
     return pagedHolders;
   }
 
-  function couponBalanceOf(address user) public view returns (uint256) {
+  /// @notice Get coupon balance with pagination support
+  /// @param user The user address
+  /// @param startIndex The starting index for pagination
+  /// @param maxResults Maximum number of coupons to process (0 means process all remaining)
+  /// @return balance The total coupon balance for the specified range
+  /// @return nextIndex The next index to continue pagination (0 if completed)
+  function couponBalanceOf(
+    address user,
+    uint256 startIndex,
+    uint256 maxResults
+  ) public view returns (uint256 balance, uint256 nextIndex) {
     ClearingHouseStorage.Layout storage $ = ClearingHouseStorage.layout();
-    uint256 total = 0;
     uint256 epoch = _epochAt(block.timestamp);
-    for (uint i = 0; i < $.couponBalances[user].length; i++) {
-      if ($.couponBalances[user][i].expirationEpoch >= epoch) {
-        total += $.couponBalances[user][i].amount - $.couponBalances[user][i].usedAmount;
+    uint256 length = $.couponBalances[user].length;
+
+    if (startIndex >= length) {
+      return (0, 0);
+    }
+
+    uint256 endIndex;
+    if (maxResults == 0) {
+      endIndex = length;
+    } else {
+      endIndex = startIndex + maxResults;
+      if (endIndex > length) {
+        endIndex = length;
       }
     }
-    return total;
+
+    for (uint256 i = startIndex; i < endIndex; i++) {
+      if ($.couponBalances[user][i].expirationEpoch >= epoch) {
+        balance += $.couponBalances[user][i].amount - $.couponBalances[user][i].usedAmount;
+      }
+    }
+
+    nextIndex = endIndex < length ? endIndex : 0;
+    return (balance, nextIndex);
+  }
+
+  /// @notice Get total coupon balance (backward compatible)
+  /// @dev Limited to first 100 coupons to prevent gas issues. Use paginated version for users with many coupons.
+  /// @param user The user address
+  /// @return Total coupon balance (limited to first 100 coupons)
+  function couponBalanceOf(address user) public view returns (uint256) {
+    (uint256 balance, ) = couponBalanceOf(user, 0, 100);
+    return balance;
   }
 
   function userCoupons(address user) public view returns (Coupon[] memory) {
