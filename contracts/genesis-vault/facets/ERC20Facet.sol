@@ -14,11 +14,17 @@ contract ERC20Facet {
 
   /**
    * @notice Transfer shares
+   * @dev SECURITY: Blocked when vault is paused or shutdown
    * @param to The recipient address
    * @param amount The amount of shares to transfer
    * @return success True if transfer succeeded
    */
   function transfer(address to, uint256 amount) external returns (bool) {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    
+    // SECURITY FIX: Add pause/shutdown check to prevent emergency control bypass
+    require(!s.paused && !s.shutdown, "ERC20Facet: Vault not active");
+    
     address owner = msg.sender;
     LibERC20._transfer(owner, to, amount);
     return true;
@@ -38,12 +44,18 @@ contract ERC20Facet {
 
   /**
    * @notice Transfer shares from another account
+   * @dev SECURITY: Blocked when vault is paused or shutdown
    * @param from The sender address
    * @param to The recipient address
    * @param amount The amount of shares to transfer
    * @return success True if transfer succeeded
    */
   function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+    LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
+    
+    // SECURITY FIX: Add pause/shutdown check to prevent emergency control bypass
+    require(!s.paused && !s.shutdown, "ERC20Facet: Vault not active");
+    
     address spender = msg.sender;
     LibERC20._spendAllowance(from, spender, amount);
     LibERC20._transfer(from, to, amount);
