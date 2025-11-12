@@ -201,12 +201,15 @@ contract OrderProcessingFacet is ReentrancyGuard {
     bool isOverWin = strikePrice < round.endPrice[order.productId];
     bool isUnderWin = strikePrice > round.endPrice[order.productId];
 
+    // Get commission fee for this round (fallback to global if not set)
+    uint256 roundCommissionFee = round.commissionFee > 0 ? round.commissionFee : bvs.commissionfee;
+
     if (order.overPrice + order.underPrice != 100) {
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Invalid,
         winAmount: 0,
-        feeRate: bvs.commissionfee,
+        feeRate: roundCommissionFee,
         fee: 0
       });
     } else if (order.overUser == order.underUser) {
@@ -219,7 +222,7 @@ contract OrderProcessingFacet is ReentrancyGuard {
       ) *
         order.unit *
         PRICE_UNIT;
-      uint256 fee = (loosePositionAmount * bvs.commissionfee) / BASE;
+      uint256 fee = (loosePositionAmount * roundCommissionFee) / BASE;
 
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
@@ -229,29 +232,29 @@ contract OrderProcessingFacet is ReentrancyGuard {
             ? WinPosition.Under
             : WinPosition.Tie,
         winAmount: loosePositionAmount,
-        feeRate: bvs.commissionfee,
+        feeRate: roundCommissionFee,
         fee: fee
       });
     } else if (isUnderWin) {
       uint256 amount = order.overPrice * order.unit * PRICE_UNIT;
-      uint256 fee = (amount * bvs.commissionfee) / BASE;
+      uint256 fee = (amount * roundCommissionFee) / BASE;
 
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Under,
         winAmount: amount,
-        feeRate: bvs.commissionfee,
+        feeRate: roundCommissionFee,
         fee: fee
       });
     } else if (isOverWin) {
       uint256 amount = order.underPrice * order.unit * PRICE_UNIT;
-      uint256 fee = (amount * bvs.commissionfee) / BASE;
+      uint256 fee = (amount * roundCommissionFee) / BASE;
 
       bvs.settlementResults[order.idx] = SettlementResult({
         idx: order.idx,
         winPosition: WinPosition.Over,
         winAmount: amount,
-        feeRate: bvs.commissionfee,
+        feeRate: roundCommissionFee,
         fee: fee
       });
     } else {
@@ -260,7 +263,7 @@ contract OrderProcessingFacet is ReentrancyGuard {
         idx: order.idx,
         winPosition: WinPosition.Tie,
         winAmount: 0,
-        feeRate: bvs.commissionfee,
+        feeRate: roundCommissionFee,
         fee: 0
       });
     }

@@ -17,6 +17,7 @@ struct Round {
   mapping(uint256 => uint256) startPrice; // key: productId
   mapping(uint256 => uint256) endPrice; // key: productId
   bool isStarted;
+  uint256 commissionFee; // Commission fee for this round (set at round start)
 }
 
 struct ProductRound {

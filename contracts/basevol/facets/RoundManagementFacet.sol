@@ -59,6 +59,15 @@ contract RoundManagementFacet {
       round.startTimestamp = initDate;
       round.endTimestamp = initDate + _getIntervalSeconds();
       round.isStarted = true;
+
+      // Apply pending commission fee to this round
+      if (bvs.pendingCommissionFee > 0) {
+        round.commissionFee = bvs.pendingCommissionFee;
+        bvs.commissionfee = bvs.pendingCommissionFee;
+        bvs.pendingCommissionFee = 0;
+      } else {
+        round.commissionFee = bvs.commissionfee;
+      }
     }
 
     for (uint i = 0; i < priceData.length; i++) {
@@ -121,6 +130,15 @@ contract RoundManagementFacet {
       nextRound.endTimestamp = nextRound.startTimestamp + _getIntervalSeconds();
       nextRound.isStarted = true;
       nextRound.isSettled = false;
+
+      // Apply pending commission fee to next round
+      if (bvs.pendingCommissionFee > 0) {
+        nextRound.commissionFee = bvs.pendingCommissionFee;
+        bvs.commissionfee = bvs.pendingCommissionFee;
+        bvs.pendingCommissionFee = 0;
+      } else {
+        nextRound.commissionFee = bvs.commissionfee;
+      }
     }
 
     if (

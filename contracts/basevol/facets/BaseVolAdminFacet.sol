@@ -16,6 +16,7 @@ contract AdminFacet {
   uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
 
   event PriceIdAdded(uint256 indexed productId, bytes32 priceId, string symbol);
+  event CommissionFeeScheduled(uint256 newFee, uint256 currentFee, uint256 timestamp);
 
   modifier onlyOwner() {
     LibDiamond.enforceIsContractOwner();
@@ -76,7 +77,11 @@ contract AdminFacet {
   function setCommissionfee(uint256 _commissionfee) external onlyAdmin {
     if (_commissionfee > MAX_COMMISSION_FEE) revert LibBaseVolStrike.InvalidCommissionFee();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-    bvs.commissionfee = _commissionfee;
+
+    // Store as pending commission fee to be applied to next round
+    bvs.pendingCommissionFee = _commissionfee;
+
+    emit CommissionFeeScheduled(_commissionfee, bvs.commissionfee, block.timestamp);
   }
 
   function setAdmin(address _adminAddress) external onlyOwner {

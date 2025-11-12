@@ -5,7 +5,20 @@ import "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IVaultManager } from "../../interfaces/IVaultManager.sol";
 import { IClearingHouse } from "../../interfaces/IClearingHouse.sol";
-import { Round, FilledOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo, RedeemRequest, TargetRedeemOrder, Position, PriceUpdateData, PriceData, WinPosition } from "../../types/Types.sol";
+import {
+  Round,
+  FilledOrder,
+  SettlementResult,
+  WithdrawalRequest,
+  Coupon,
+  PriceInfo,
+  RedeemRequest,
+  TargetRedeemOrder,
+  Position,
+  PriceUpdateData,
+  PriceData,
+  WinPosition
+} from "../../types/Types.sol";
 import { PythLazer } from "../../libraries/PythLazer.sol";
 
 library LibBaseVolStrike {
@@ -23,6 +36,7 @@ library LibBaseVolStrike {
     uint256 usedCouponAmount
   );
 
+  // IMPORTANT: When adding new variables, add them at the end of this struct to maintain storage layout compatibility
   struct DiamondStorage {
     IERC20 token; // Prediction token
     IPyth oracle;
@@ -48,7 +62,7 @@ library LibBaseVolStrike {
     PythLazer pythLazer;
     mapping(uint256 => uint256) settledOrderIndex; // epoch => next order index to settle
     mapping(uint256 => bool) isFullySettled; // epoch => fully settled flag
-    /* IMPROTANT: you can add new variables here */
+    uint256 pendingCommissionFee; // Pending commission fee to be applied to next round
   }
 
   function diamondStorage() internal pure returns (DiamondStorage storage ds) {
@@ -72,6 +86,9 @@ library LibBaseVolStrike {
 
     uint256 collectedFee = 0;
     WinPosition winPosition;
+
+    // Get commission fee for this round (fallback to global if not set)
+    uint256 roundCommissionFee = round.commissionFee > 0 ? round.commissionFee : bvs.commissionfee;
 
     if (order.overPrice + order.underPrice != 100) {
       winPosition = WinPosition.Invalid;
@@ -122,10 +139,22 @@ library LibBaseVolStrike {
       }
     } else if (isOverWin) {
       winPosition = WinPosition.Over;
-      collectedFee += _processWin(order.overUser, order.underUser, order, winPosition);
+      collectedFee += _processWin(
+        order.overUser,
+        order.underUser,
+        order,
+        winPosition,
+        roundCommissionFee
+      );
     } else if (isUnderWin) {
       winPosition = WinPosition.Under;
-      collectedFee += _processWin(order.underUser, order.overUser, order, winPosition);
+      collectedFee += _processWin(
+        order.underUser,
+        order.overUser,
+        order,
+        winPosition,
+        roundCommissionFee
+      );
     } else {
       // Tie case
       uint256 overUserBalance = bvs.clearingHouse.userBalances(order.overUser);
@@ -167,7 +196,7 @@ library LibBaseVolStrike {
         idx: order.idx,
         winPosition: WinPosition.Tie,
         winAmount: 0,
-        feeRate: bvs.commissionfee,
+        feeRate: roundCommissionFee,
         fee: 0
       });
     }
@@ -180,7 +209,8 @@ library LibBaseVolStrike {
     address winner,
     address loser,
     FilledOrder storage order,
-    WinPosition winPosition
+    WinPosition winPosition,
+    uint256 commissionFee
   ) private returns (uint256) {
     DiamondStorage storage bvs = diamondStorage();
 
@@ -191,13 +221,40 @@ library LibBaseVolStrike {
     uint256 loserAmount = order.overUser == loser
       ? order.overPrice * order.unit * PRICE_UNIT
       : order.underPrice * order.unit * PRICE_UNIT;
-    uint256 fee = (loserAmount * bvs.commissionfee) / BASE;
+    uint256 fee = (loserAmount * commissionFee) / BASE;
 
     // Calculate redeem ratio
     uint256 winnerRedeemed = (winPosition == WinPosition.Over)
       ? order.overRedeemed
       : order.underRedeemed;
     uint256 redeemRatio = winnerRedeemed > 0 ? (winnerRedeemed * PRICE_UNIT) / order.unit : 0;
+
+    // Process escrow settlements
+    _processEscrowSettlement(winner, loser, order, winnerAmount, loserAmount, fee, redeemRatio);
+
+    // Emit settlement events
+    _emitWinSettlementEvents(winner, loser, order, winnerAmount, loserAmount, redeemRatio);
+
+    bvs.settlementResults[order.idx] = SettlementResult({
+      idx: order.idx,
+      winPosition: winPosition,
+      winAmount: loserAmount,
+      feeRate: commissionFee,
+      fee: fee
+    });
+    return fee;
+  }
+
+  function _processEscrowSettlement(
+    address winner,
+    address loser,
+    FilledOrder storage order,
+    uint256 winnerAmount,
+    uint256 loserAmount,
+    uint256 fee,
+    uint256 redeemRatio
+  ) private {
+    DiamondStorage storage bvs = diamondStorage();
 
     // Split loser's amount (winning profit) based on redeem ratio
     uint256 vaultWinAmount = (loserAmount * redeemRatio) / PRICE_UNIT;
@@ -248,6 +305,17 @@ library LibBaseVolStrike {
         bvs.clearingHouse.addUserBalance(bvs.redeemVault, redeemAmount);
       }
     }
+  }
+
+  function _emitWinSettlementEvents(
+    address winner,
+    address loser,
+    FilledOrder storage order,
+    uint256 winnerAmount,
+    uint256 loserAmount,
+    uint256 redeemRatio
+  ) private {
+    DiamondStorage storage bvs = diamondStorage();
 
     // Get coupon information for events
     uint256 usedCoupon = bvs.clearingHouse.escrowCoupons(
@@ -269,6 +337,8 @@ library LibBaseVolStrike {
 
     // Calculate final amounts for events
     uint256 vaultWinnerAmount = redeemRatio > 0 ? (winnerAmount * redeemRatio) / PRICE_UNIT : 0;
+    uint256 vaultWinAmount = (loserAmount * redeemRatio) / PRICE_UNIT;
+    uint256 userWinAmount = loserAmount - vaultWinAmount;
     uint256 winnerTotalReceived = userWinAmount + (winnerAmount - vaultWinnerAmount);
 
     // Emit settlement event for winner
@@ -293,15 +363,6 @@ library LibBaseVolStrike {
         0
       );
     }
-
-    bvs.settlementResults[order.idx] = SettlementResult({
-      idx: order.idx,
-      winPosition: winPosition,
-      winAmount: loserAmount,
-      feeRate: bvs.commissionfee,
-      fee: fee
-    });
-    return fee;
   }
 
   function _transferRedeemedAmountsToVault(FilledOrder storage order) private {
