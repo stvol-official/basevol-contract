@@ -47,10 +47,16 @@ contract RoundManagementFacet {
 
     PriceData[] memory priceData = _processPythLazerPriceUpdate(priceLazerData, initDate);
 
-    uint256 startEpoch = _epochAt(initDate);
-    uint256 currentEpochNumber = _epochAt(block.timestamp);
+    // Validate priceData array is not empty
+    require(priceData.length > 0, "Empty price data");
 
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+
+    // Validate priceData length matches expected priceIdCount
+    require(priceData.length == bvs.priceIdCount, "Price data length mismatch");
+
+    uint256 startEpoch = _epochAt(initDate);
+    uint256 currentEpochNumber = _epochAt(block.timestamp);
 
     // start current round
     Round storage round = bvs.rounds[startEpoch];

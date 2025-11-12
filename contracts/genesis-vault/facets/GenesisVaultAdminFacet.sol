@@ -329,6 +329,9 @@ contract GenesisVaultAdminFacet {
   }
 
   function _setDepositLimits(uint256 userLimit, uint256 vaultLimit) internal {
+    // Validate logical consistency: user limit cannot exceed vault limit
+    require(userLimit <= vaultLimit, "User limit cannot exceed vault limit");
+    
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     if (s.userDepositLimit != userLimit) {
       uint256 oldUserDepositLimit = s.userDepositLimit;

@@ -3,7 +3,7 @@ pragma solidity ^0.8.4;
 
 import { LibBaseVolStrike } from "../libraries/LibBaseVolStrike.sol";
 import { LibDiamond } from "../../diamond-common/libraries/LibDiamond.sol";
-import { PriceInfo } from "../../types/Types.sol";
+import { PriceInfo, Round } from "../../types/Types.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IPyth } from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
@@ -98,6 +98,13 @@ contract AdminFacet {
 
   function setLastFilledOrderId(uint256 _lastFilledOrderId) external onlyOperator {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    
+    // Ensure order ID only moves forward to prevent collision
+    require(
+      _lastFilledOrderId >= bvs.lastFilledOrderId,
+      "Order ID can only increase"
+    );
+    
     bvs.lastFilledOrderId = _lastFilledOrderId;
   }
 
@@ -114,6 +121,14 @@ contract AdminFacet {
 
     if (priceInfo.priceId == bytes32(0)) revert LibBaseVolStrike.InvalidPriceId();
     if (bytes(priceInfo.symbol).length == 0) revert LibBaseVolStrike.InvalidSymbol();
+
+    // Prevent changes during active round
+    uint256 currentEpoch = _getCurrentEpoch();
+    Round storage currentRound = bvs.rounds[currentEpoch];
+    require(
+      !currentRound.isStarted || currentRound.isSettled,
+      "Cannot change price info during active round"
+    );
 
     uint256 existingProductId = bvs.priceIdToProductId[priceInfo.priceId];
     bytes32 oldPriceId = bvs.priceInfos[priceInfo.productId].priceId;
@@ -134,7 +149,14 @@ contract AdminFacet {
     emit PriceIdAdded(priceInfo.productId, priceInfo.priceId, priceInfo.symbol);
   }
 
-  // Internal function
+  // Internal helper functions
+  function _getCurrentEpoch() internal view returns (uint256) {
+    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
+    if (block.timestamp < bvs.startTimestamp) return 0;
+    uint256 elapsedSeconds = block.timestamp - bvs.startTimestamp;
+    return elapsedSeconds / bvs.intervalSeconds;
+  }
+
   function _addPriceId(bytes32 _priceId, uint256 _productId, string memory _symbol) internal {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     if (_priceId == bytes32(0)) revert LibBaseVolStrike.InvalidPriceId();
