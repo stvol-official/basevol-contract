@@ -57,6 +57,11 @@ contract RoundManagementFacet {
     // Validate priceData length matches expected priceIdCount
     require(priceData.length == bvs.priceIdCount, "Price data length mismatch");
 
+    // Validate all prices are greater than zero after oracle call
+    for (uint i = 0; i < priceData.length; i++) {
+      require(priceData[i].price > 0, "Invalid price");
+    }
+
     uint256 startEpoch = _epochAt(initDate);
     uint256 currentEpochNumber = _epochAt(block.timestamp);
 
@@ -296,10 +301,10 @@ contract RoundManagementFacet {
     (bytes memory payload, ) = bvs.pythLazer.verifyUpdate{ value: verificationFee }(
       priceLazerData.priceData
     );
-    
+
     uint256 excessAmount = msg.value - verificationFee;
     if (excessAmount > 0) {
-      (bool success, ) = payable(msg.sender).call{value: excessAmount}("");
+      (bool success, ) = payable(msg.sender).call{ value: excessAmount }("");
       if (!success) {
         emit OracleRefundFailed(msg.sender, excessAmount);
       } else {
