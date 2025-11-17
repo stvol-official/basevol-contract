@@ -86,11 +86,11 @@ struct Layout {
     mapping(uint256 => address[]) epochRedeemUsers;
 
     // Fee Management
-    uint256 managementFee;     // Annual management fee (e.g., 200 = 2%)
-    uint256 performanceFee;    // Performance fee (e.g., 2000 = 20%)
-    uint256 hurdleRate;        // Minimum return threshold
-    uint256 entryCost;         // Entry cost (fixed amount)
-    uint256 exitCost;          // Exit cost (fixed amount)
+    uint256 managementFee;     // Annual management fee in 1e18 precision (e.g., 0.02 * 1e18 = 2%)
+    uint256 performanceFee;    // Performance fee in 1e18 precision (e.g., 0.20 * 1e18 = 20%)
+    uint256 hurdleRate;        // Minimum return threshold in 1e18 precision (e.g., 0.05 * 1e18 = 5%)
+    uint256 entryCost;         // Entry cost in asset decimals (e.g., 1e6 = 1 USDC)
+    uint256 exitCost;          // Exit cost in asset decimals (e.g., 1e6 = 1 USDC)
     address feeRecipient;      // Fee recipient address
 
     // User Performance Tracking
@@ -451,14 +451,14 @@ const CONFIG = {
   STRATEGY: "0x...",
   FEE_RECIPIENT: "0x...",
 
-  // Fees (in basis points, scaled by 1e16)
-  MANAGEMENT_FEE: 200n * 10n ** 16n, // 2%
-  PERFORMANCE_FEE: 2000n * 10n ** 16n, // 20%
-  HURDLE_RATE: 0n,
+  // Fees (in 1e18 precision: 0.02 * 1e18 = 2%)
+  MANAGEMENT_FEE: 20n * 10n ** 15n, // 2% = 0.02 * 1e18
+  PERFORMANCE_FEE: 200n * 10n ** 15n, // 20% = 0.20 * 1e18
+  HURDLE_RATE: 0n, // 0% = 0 * 1e18
 
-  // Entry/Exit costs (fixed USDC amounts)
-  ENTRY_COST: 0n, // 0 USDC
-  EXIT_COST: 0n, // 0 USDC
+  // Entry/Exit costs (in asset decimals: USDC has 6 decimals)
+  ENTRY_COST: 0n, // 0 USDC = 0 * 1e6
+  EXIT_COST: 0n, // 0 USDC = 0 * 1e6
 
   // Limits
   USER_DEPOSIT_LIMIT: 10_000_000_000n, // 10k USDC

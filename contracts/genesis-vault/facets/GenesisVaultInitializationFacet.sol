@@ -35,11 +35,11 @@ contract GenesisVaultInitializationFacet {
    * @param _baseVolContract BaseVol contract address
    * @param _strategy GenesisStrategy contract address
    * @param _feeRecipient Fee recipient address
-   * @param _managementFee Annual management fee (e.g., 200 = 2%)
-   * @param _performanceFee Performance fee (e.g., 2000 = 20%)
-   * @param _hurdleRate Hurdle rate (e.g., 500 = 5%)
-   * @param _entryCost Entry cost in basis points
-   * @param _exitCost Exit cost in basis points
+   * @param _managementFee Annual management fee in 1e18 precision (e.g., 0.02 * 1e18 = 2%)
+   * @param _performanceFee Performance fee in 1e18 precision (e.g., 0.20 * 1e18 = 20%)
+   * @param _hurdleRate Hurdle rate in 1e18 precision (e.g., 0.05 * 1e18 = 5%)
+   * @param _entryCost Entry cost in asset decimals (e.g., 1e6 = 1 USDC for 6 decimals)
+   * @param _exitCost Exit cost in asset decimals (e.g., 1e6 = 1 USDC for 6 decimals)
    * @param _userDepositLimit User deposit limit
    * @param _vaultDepositLimit Vault deposit limit
    */
@@ -79,7 +79,6 @@ contract GenesisVaultInitializationFacet {
       // Fallback to 18 if asset doesn't support decimals()
       s.decimals = 18;
     }
-
     s.admin = _admin;
     s.owner = LibDiamond.contractOwner(); // Set from Diamond owner
 

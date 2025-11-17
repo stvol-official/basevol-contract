@@ -85,11 +85,11 @@ library LibGenesisVaultStorage {
     mapping(uint256 => address[]) epochDepositUsers; // List of users who made deposit requests in each epoch
     mapping(uint256 => address[]) epochRedeemUsers; // List of users who made redeem requests in each epoch
     // ============ Fee Management ============
-    uint256 managementFee; // Annual management fee (e.g., 200 = 2%)
-    uint256 performanceFee; // Performance fee on profits (e.g., 2000 = 20%)
-    uint256 hurdleRate; // Minimum return before performance fee applies
-    uint256 entryCost; // Fixed entry cost in asset units
-    uint256 exitCost; // Fixed exit cost in asset units
+    uint256 managementFee; // Annual management fee in 1e18 precision (e.g., 0.02 * 1e18 = 2%)
+    uint256 performanceFee; // Performance fee on profits in 1e18 precision (e.g., 0.20 * 1e18 = 20%)
+    uint256 hurdleRate; // Minimum return before performance fee applies in 1e18 precision (e.g., 0.05 * 1e18 = 5%)
+    uint256 entryCost; // Fixed entry cost in asset decimals (e.g., 1e6 = 1 USDC)
+    uint256 exitCost; // Fixed exit cost in asset decimals (e.g., 1e6 = 1 USDC)
     address feeRecipient; // Address to receive all fees
     // ============ User Performance Tracking (for WAEP) ============
     mapping(address => UserPerformanceData) userPerformanceData; // User-based performance fee tracking

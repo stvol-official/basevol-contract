@@ -553,7 +553,7 @@ contract SettlementFacet is IVaultErrors {
 
     // Calculate fee rate based on elapsed time
     uint256 feeRate = (s.managementFee * timeElapsed) / (365 days);
-    uint256 feeShares = (currentTotalSupply * feeRate) / (10 ** s.decimals);
+    uint256 feeShares = (currentTotalSupply * feeRate) / FLOAT_PRECISION;
 
     if (feeShares == 0) {
       feeData.lastFeeTimestamp = block.timestamp;
