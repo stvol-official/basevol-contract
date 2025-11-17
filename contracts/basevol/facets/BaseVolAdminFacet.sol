@@ -15,6 +15,9 @@ contract AdminFacet {
 
   uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
 
+  // ============ Errors ============
+  error TimelockMustBeUsed();
+
   event PriceIdAdded(uint256 indexed productId, bytes32 priceId, string symbol);
   event PriceIdUpdated(
     uint256 indexed productId,
@@ -67,6 +70,7 @@ contract AdminFacet {
   }
 
   function setPythLazer(address _pythLazer) external onlyAdmin {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_pythLazer == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     address oldPythLazer = address(bvs.pythLazer);
@@ -93,6 +97,7 @@ contract AdminFacet {
   }
 
   function setOperator(address _operatorAddress) external onlyAdmin {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_operatorAddress == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     address oldOperator = bvs.operatorAddress;
@@ -101,6 +106,7 @@ contract AdminFacet {
   }
 
   function setOracle(address _oracle) external onlyAdmin {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_oracle == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     address oldOracle = address(bvs.oracle);
@@ -109,6 +115,7 @@ contract AdminFacet {
   }
 
   function setCommissionfee(uint256 _commissionfee) external onlyAdmin {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_commissionfee > MAX_COMMISSION_FEE) revert LibBaseVolStrike.InvalidCommissionFee();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
 
@@ -119,6 +126,7 @@ contract AdminFacet {
   }
 
   function setAdmin(address _adminAddress) external onlyOwner {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_adminAddress == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     address oldAdmin = bvs.adminAddress;
@@ -127,6 +135,7 @@ contract AdminFacet {
   }
 
   function setToken(address _token) external onlyAdmin {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_token == address(0)) revert LibBaseVolStrike.InvalidAddress();
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     address oldToken = address(bvs.token);

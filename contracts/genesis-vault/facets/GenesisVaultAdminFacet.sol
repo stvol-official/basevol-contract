@@ -21,7 +21,7 @@ contract GenesisVaultAdminFacet {
   uint256 private constant MAX_MANAGEMENT_FEE = 5e16; // 5%
   uint256 private constant MAX_PERFORMANCE_FEE = 5e17; // 50%
   uint256 private constant MAX_FIXED_COST = 1000e6; // 1000 USDC (assuming 6 decimals)
-  
+
   // Security: Maximum strategy approval limit (1M USDC)
   uint256 private constant MAX_STRATEGY_APPROVAL = 1_000_000e6;
 
@@ -57,7 +57,7 @@ contract GenesisVaultAdminFacet {
     address indexed oldRecipient,
     address indexed newRecipient
   );
-  
+
   // Security: Approval management events
   event StrategyApprovalGranted(address indexed strategy, uint256 amount);
   event StrategyApprovalRefreshed(address indexed strategy, uint256 newAmount);
@@ -75,7 +75,8 @@ contract GenesisVaultAdminFacet {
   error VaultNotPaused();
   error VaultPaused();
   error TotalSupplyNotZero();
-  
+  error TimelockMustBeUsed();
+
   // Security: Approval management errors
   error ExceedsMaxApproval();
   error NoStrategySet();
@@ -112,6 +113,7 @@ contract GenesisVaultAdminFacet {
    * @param _baseVolContract BaseVol contract address
    */
   function setBaseVolContract(address _baseVolContract) external onlyOwner {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_baseVolContract == address(0)) revert InvalidAddress();
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     s.baseVolContract = _baseVolContract;
@@ -125,6 +127,7 @@ contract GenesisVaultAdminFacet {
    * @param _strategy New strategy address
    */
   function setStrategy(address _strategy) external onlyOwner {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_strategy == address(0)) revert InvalidAddress();
 
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
@@ -146,7 +149,7 @@ contract GenesisVaultAdminFacet {
     }
 
     s.strategy = _strategy;
-    
+
     // Security Fix: Capped approval instead of infinite
     // s.asset.approve(_strategy, type(uint256).max); // REMOVED - Security vulnerability
     s.asset.approve(_strategy, MAX_STRATEGY_APPROVAL);
@@ -169,6 +172,7 @@ contract GenesisVaultAdminFacet {
    * @param _admin New admin address
    */
   function setAdmin(address _admin) external onlyOwner {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_admin == address(0)) revert InvalidAddress();
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     address oldAdmin = s.admin;
@@ -181,6 +185,7 @@ contract GenesisVaultAdminFacet {
    * @param _clearingHouse ClearingHouse contract address
    */
   function setClearingHouse(address _clearingHouse) external onlyOwner {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_clearingHouse == address(0)) revert InvalidAddress();
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     s.clearingHouse = _clearingHouse;
@@ -270,6 +275,7 @@ contract GenesisVaultAdminFacet {
     uint256 _performanceFee,
     uint256 _hurdleRate
   ) external onlyAdmin {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     if (_managementFee > MAX_MANAGEMENT_FEE) revert InvalidFeeValue();
     if (_performanceFee > MAX_PERFORMANCE_FEE) revert InvalidFeeValue();
     if (_feeRecipient == address(0)) revert InvalidAddress();
@@ -299,12 +305,14 @@ contract GenesisVaultAdminFacet {
   /// @param _entryCost The entry cost as a fixed amount in asset units.
   /// @param _exitCost The exit cost as a fixed amount in asset units.
   function setEntryAndExitCost(uint256 _entryCost, uint256 _exitCost) external virtual onlyAdmin {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     _setEntryCost(_entryCost);
     _setExitCost(_exitCost);
   }
 
   /// @dev Sets the deposit limits including user and vault limit.
   function setDepositLimits(uint256 userLimit, uint256 vaultLimit) external onlyAdmin {
+    if (LibDiamond.isTimelockEnabled()) revert TimelockMustBeUsed();
     _setDepositLimits(userLimit, vaultLimit);
   }
 
@@ -331,7 +339,7 @@ contract GenesisVaultAdminFacet {
   function _setDepositLimits(uint256 userLimit, uint256 vaultLimit) internal {
     // Validate logical consistency: user limit cannot exceed vault limit
     require(userLimit <= vaultLimit, "User limit cannot exceed vault limit");
-    
+
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     if (s.userDepositLimit != userLimit) {
       uint256 oldUserDepositLimit = s.userDepositLimit;
@@ -353,10 +361,10 @@ contract GenesisVaultAdminFacet {
   /// @param newAmount New approval amount (must not exceed MAX_STRATEGY_APPROVAL)
   function refreshStrategyApproval(uint256 newAmount) external onlyOwner {
     if (newAmount > MAX_STRATEGY_APPROVAL) revert ExceedsMaxApproval();
-    
+
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     if (s.strategy == address(0)) revert NoStrategySet();
-    
+
     s.asset.approve(s.strategy, newAmount);
     emit StrategyApprovalRefreshed(s.strategy, newAmount);
   }
@@ -366,7 +374,7 @@ contract GenesisVaultAdminFacet {
   function revokeStrategyApproval() external onlyOwner {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
     if (s.strategy == address(0)) revert NoStrategySet();
-    
+
     s.asset.approve(s.strategy, 0);
     emit StrategyApprovalRevoked(s.strategy);
   }
@@ -375,12 +383,12 @@ contract GenesisVaultAdminFacet {
   /// @dev Can only be called by owner in emergency situations
   function emergencyRevokeAllApprovals() external onlyOwner {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    
+
     // Revoke strategy approval
     if (s.strategy != address(0)) {
       s.asset.approve(s.strategy, 0);
     }
-    
+
     emit EmergencyApprovalRevoked(msg.sender);
   }
 
@@ -397,34 +405,32 @@ contract GenesisVaultAdminFacet {
   /// @return currentAllowance Current approval amount
   /// @return maxAllowance Maximum allowed approval
   /// @return utilizationPct Approval utilization percentage (18 decimals)
-  function checkStrategyApprovalHealth() external view returns (
-    bool isHealthy,
-    uint256 currentAllowance,
-    uint256 maxAllowance,
-    uint256 utilizationPct
-  ) {
+  function checkStrategyApprovalHealth()
+    external
+    view
+    returns (bool isHealthy, uint256 currentAllowance, uint256 maxAllowance, uint256 utilizationPct)
+  {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
-    
+
     if (s.strategy == address(0)) {
       return (true, 0, MAX_STRATEGY_APPROVAL, 0);
     }
-    
+
     currentAllowance = s.asset.allowance(address(this), s.strategy);
     maxAllowance = MAX_STRATEGY_APPROVAL;
-    
+
     // Calculate utilization percentage
     if (currentAllowance > 0) {
       utilizationPct = (currentAllowance * FLOAT_PRECISION) / maxAllowance;
     } else {
       utilizationPct = 0;
     }
-    
+
     // Healthy if:
     // 1. Not infinite approval
     // 2. Within max limit
-    isHealthy = (currentAllowance != type(uint256).max) && 
-                (currentAllowance <= maxAllowance);
-    
+    isHealthy = (currentAllowance != type(uint256).max) && (currentAllowance <= maxAllowance);
+
     return (isHealthy, currentAllowance, maxAllowance, utilizationPct);
   }
 

@@ -20,6 +20,10 @@ library LibDiamond {
     mapping(bytes4 => bool) supportedInterfaces;
     // owner of the contract
     address contractOwner;
+    // timelock addresses for governance
+    address criticalTimelock; // For fund-impacting operations (48h delay)
+    address standardTimelock; // For UX-impacting operations (12h delay)
+    bool timelockEnabled; // Global timelock toggle
   }
 
   function diamondStorage() internal pure returns (DiamondStorage storage ds) {
@@ -169,5 +173,91 @@ library LibDiamond {
       contractSize := extcodesize(_contract)
     }
     require(contractSize > 0, _errorMessage);
+  }
+
+  // ============ Timelock Functions ============
+
+  event TimelockAddressSet(address indexed timelockType, address indexed timelockAddress);
+  event TimelockEnabledSet(bool enabled);
+
+  /**
+   * @notice Set the critical timelock address (for fund-impacting operations)
+   */
+  function setCriticalTimelock(address _timelock) internal {
+    require(_timelock != address(0), "LibDiamond: Timelock cannot be zero address");
+    DiamondStorage storage ds = diamondStorage();
+    ds.criticalTimelock = _timelock;
+    emit TimelockAddressSet(address(1), _timelock); // address(1) represents critical
+  }
+
+  /**
+   * @notice Set the standard timelock address (for UX-impacting operations)
+   */
+  function setStandardTimelock(address _timelock) internal {
+    require(_timelock != address(0), "LibDiamond: Timelock cannot be zero address");
+    DiamondStorage storage ds = diamondStorage();
+    ds.standardTimelock = _timelock;
+    emit TimelockAddressSet(address(2), _timelock); // address(2) represents standard
+  }
+
+  /**
+   * @notice Enable or disable timelock globally
+   */
+  function setTimelockEnabled(bool _enabled) internal {
+    DiamondStorage storage ds = diamondStorage();
+    ds.timelockEnabled = _enabled;
+    emit TimelockEnabledSet(_enabled);
+  }
+
+  /**
+   * @notice Get the critical timelock address
+   */
+  function getCriticalTimelock() internal view returns (address) {
+    return diamondStorage().criticalTimelock;
+  }
+
+  /**
+   * @notice Get the standard timelock address
+   */
+  function getStandardTimelock() internal view returns (address) {
+    return diamondStorage().standardTimelock;
+  }
+
+  /**
+   * @notice Check if timelock is enabled
+   */
+  function isTimelockEnabled() internal view returns (bool) {
+    return diamondStorage().timelockEnabled;
+  }
+
+  /**
+   * @notice Enforce that the caller is the critical timelock
+   */
+  function enforceIsCriticalTimelock() internal view {
+    require(
+      msg.sender == diamondStorage().criticalTimelock,
+      "LibDiamond: Must be critical timelock"
+    );
+  }
+
+  /**
+   * @notice Enforce that the caller is the standard timelock
+   */
+  function enforceIsStandardTimelock() internal view {
+    require(
+      msg.sender == diamondStorage().standardTimelock,
+      "LibDiamond: Must be standard timelock"
+    );
+  }
+
+  /**
+   * @notice Enforce that the caller is either timelock (for admin operations)
+   */
+  function enforceIsTimelock() internal view {
+    DiamondStorage storage ds = diamondStorage();
+    require(
+      msg.sender == ds.criticalTimelock || msg.sender == ds.standardTimelock,
+      "LibDiamond: Must be timelock"
+    );
   }
 }
