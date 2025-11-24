@@ -24,4 +24,6 @@ interface IBaseVolErrors is ICommonErrors {
   error InvalidProductId();
   error InsufficientVerificationFee(uint256 required, uint256 provided);
   error InvalidChannel();
+  error InvalidPublishTime(uint64 timestamp, uint64 publishTime);
+  error StalePrice(uint64 timestamp, uint64 publishTime, uint256 age, uint256 maxAge);
 }

@@ -20,6 +20,7 @@ contract RoundManagementFacet {
   uint256 private constant MAX_PRICE_AGE = 300; // 5 * 60 (5min) - maximum age of price data in seconds
   uint256 private constant MAX_PRICE_DEVIATION_BPS = 5000; // 50% maximum price deviation (basis points)
   uint256 private constant BPS_DENOMINATOR = 10000;
+  uint256 private constant MICROSECONDS_PER_SECOND = 1_000_000; // Pyth publishTime is in microseconds
 
   event StartRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event EndRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
@@ -290,9 +291,9 @@ contract RoundManagementFacet {
 
     (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
       .parsePayloadHeader(payload);
-
-    require(datetime >= publishTime, "Invalid publish time: future timestamp");
-    require(datetime - publishTime <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
+    uint256 publishTimeInSeconds = uint256(publishTime) / MICROSECONDS_PER_SECOND;
+    require(datetime >= publishTimeInSeconds, "Invalid publish time: future timestamp");
+    require(datetime - publishTimeInSeconds <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
 
     if (channel != PythLazerLib.Channel.RealTime) {
       revert LibBaseVolStrike.InvalidChannel();

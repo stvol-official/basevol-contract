@@ -19,10 +19,10 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-// const DEPLOYED_PROXY = "0x2fEF57866d4b4a6ba80FB3E3107E369B43a022A0"; // for testnet
-// const PYTH_LAZER_LIB_ADDRESS = "0x824E6ECAc20d67bFe941e4Af9530d206286FA937"; // for testnet
-const DEPLOYED_PROXY = "0xcD771C92bE9CD5b2281B3452Ce32C8f620E5BAE1"; // for mainnet
-const PYTH_LAZER_LIB_ADDRESS = "0xeCA480C76d8DB037dEab8aAe7F12e9C1867a37Ba"; // for mainnet
+const DEPLOYED_PROXY = "0x31e82Ce63b81c83E9eD1838B575F720BCD87029e"; // for testnet
+const PYTH_LAZER_LIB_ADDRESS = "0xB399824A08b1BECb58a499ac1D987f7441317204"; // for testnet
+// const DEPLOYED_PROXY = "0xcD771C92bE9CD5b2281B3452Ce32C8f620E5BAE1"; // for mainnet
+// const PYTH_LAZER_LIB_ADDRESS = "0xeCA480C76d8DB037dEab8aAe7F12e9C1867a37Ba"; // for mainnet
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));

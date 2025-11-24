@@ -48,6 +48,7 @@ contract BaseVolOneMin is
   uint256 private constant BUFFER_SECONDS = 5;
   uint256 private constant START_TIMESTAMP = 1750636800; // for epoch
   uint256 private constant MAX_PRICE_AGE = 300; // 5 * 60 (5min) - maximum age of price data in seconds
+  uint256 private constant MICROSECONDS_PER_SECOND = 1_000_000; // Pyth publishTime is in microseconds
 
   event StartRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event EndRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
@@ -478,7 +479,7 @@ contract BaseVolOneMin is
     uint256 balance = address(this).balance;
     require(balance > 0, "No ETH to retrieve");
 
-    (bool success, ) = payable($.adminAddress).call{value: balance}("");
+    (bool success, ) = payable($.adminAddress).call{ value: balance }("");
     require(success, "ETH transfer failed");
 
     emit ETHRetrieved($.adminAddress, balance);
@@ -606,10 +607,10 @@ contract BaseVolOneMin is
     (bytes memory payload, ) = $.pythLazer.verifyUpdate{ value: verificationFee }(
       priceLazerData.priceData
     );
-    
+
     uint256 excessAmount = msg.value - verificationFee;
     if (excessAmount > 0) {
-      (bool success, ) = payable(msg.sender).call{value: excessAmount}("");
+      (bool success, ) = payable(msg.sender).call{ value: excessAmount }("");
       if (!success) {
         emit OracleRefundFailed(msg.sender, excessAmount);
       } else {
@@ -620,8 +621,9 @@ contract BaseVolOneMin is
     (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
       .parsePayloadHeader(payload);
 
-    require(timestamp >= publishTime, "Invalid publish time: future timestamp");
-    require(timestamp - publishTime <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
+    uint256 publishTimeInSeconds = uint256(publishTime) / MICROSECONDS_PER_SECOND;
+    require(timestamp >= publishTimeInSeconds, "Invalid publish time: future timestamp");
+    require(timestamp - publishTimeInSeconds <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
 
     if (channel != PythLazerLib.Channel.RealTime) {
       revert InvalidChannel();
