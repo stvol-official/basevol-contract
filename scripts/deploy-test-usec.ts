@@ -1,8 +1,8 @@
 import { ethers, network, run } from "hardhat";
 
 /*
- npx hardhat run --network base_sepolia scripts/deploy-test-usecl.ts
- npx hardhat verify --constructor-args dev.erc20.arguments.js --network base_sepolia 0xe722424e913f48bAC7CD2C1Ae981e2cD09bd95EC
+ npx hardhat run --network base_sepolia scripts/deploy-test-usec.ts
+ npx hardhat verify --constructor-args "[\"BASEVOL TEST USDC\",\"vUSDC\",6,\"0xC61042a7e9a6fe7E738550f24030D37Ecb296DC0\"]" --network base_sepolia 0xe722424e913f48bAC7CD2C1Ae981e2cD09bd95EC
 */
 
 const main = async () => {

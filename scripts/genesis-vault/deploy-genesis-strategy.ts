@@ -7,7 +7,7 @@ import config from "../../config";
 */
 const NETWORK = ["base_sepolia", "base"] as const;
 type SupportedNetwork = (typeof NETWORK)[number];
-const GENESIS_VAULT_ADDRESS = "0xb01777d4e6d9b01b6541a500e17be149f220e4de";
+const GENESIS_VAULT_ADDRESS = "0x640F0323257274883823b12b6C52e0aD809c3C59";
 
 const main = async () => {
   // Get network data from Hardhat config
