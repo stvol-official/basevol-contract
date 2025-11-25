@@ -457,7 +457,7 @@ contract GenesisStrategy is
 
   /// @notice Stops strategy while processing all assets back to vault.
   function stop() external onlyOwnerOrVault whenNotPaused {
-    _setStrategyStatus(StrategyStatus.DEUTILIZING);
+    _setStrategyStatus(StrategyStatus.IDLE);
     _deutilize();
 
     _pause();
