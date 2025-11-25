@@ -187,10 +187,6 @@ contract GenesisStrategy is
 
       // Track outgoing funds
       _decreaseExpectedBalance(idleBalance);
-
-      emit DebugLog(
-        string(abi.encodePacked("Transferred ", idleBalance.toString(), " idle assets to vault"))
-      );
     }
 
     // 4. If no async withdrawals are pending, set status to IDLE
@@ -222,16 +218,6 @@ contract GenesisStrategy is
 
       // Track incoming funds
       _increaseExpectedBalance(vaultIdleAssets);
-
-      emit DebugLog(
-        string(
-          abi.encodePacked(
-            "Transferred ",
-            vaultIdleAssets.toString(),
-            " idle assets from vault to strategy"
-          )
-        )
-      );
     }
 
     // Get current total assets under management
@@ -252,27 +238,6 @@ contract GenesisStrategy is
     uint256 targetMorpho = totalAssets - targetBaseVol;
 
     bool morphoConfigured = address($.morphoVaultManager) != address(0);
-
-    emit DebugLog(
-      string(
-        abi.encodePacked(
-          "Rebalancing: Total=",
-          totalAssets.toString(),
-          " Idle=",
-          idleAssets.toString(),
-          " CurrentBV=",
-          currentBaseVol.toString(),
-          " CurrentM=",
-          currentMorpho.toString(),
-          " TargetBV=",
-          targetBaseVol.toString(),
-          " TargetM=",
-          targetMorpho.toString(),
-          " MorphoConfigured=",
-          morphoConfigured ? "true" : "false"
-        )
-      )
-    );
 
     // Execute rebalancing
     _executeRebalancing(
@@ -316,9 +281,6 @@ contract GenesisStrategy is
     if (baseVolAmount > 0) {
       $.baseVolManager.withdrawFromClearingHouse(baseVolAmount);
       hasWithdrawals = true;
-      emit DebugLog(
-        string(abi.encodePacked("Withdrawing BaseVol for settlement: ", baseVolAmount.toString()))
-      );
     }
 
     // 2. Withdraw all Morpho assets (if configured)
@@ -327,9 +289,6 @@ contract GenesisStrategy is
       if (morphoAmount > 0) {
         $.morphoVaultManager.withdrawFromMorpho(morphoAmount);
         hasWithdrawals = true;
-        emit DebugLog(
-          string(abi.encodePacked("Withdrawing Morpho for settlement: ", morphoAmount.toString()))
-        );
       }
     }
 
@@ -358,15 +317,6 @@ contract GenesisStrategy is
 
         // Track outgoing funds
         _decreaseExpectedBalance(transferAmount);
-
-        emit DebugLog(
-          string(
-            abi.encodePacked(
-              "Transferring idle assets to vault for settlement: ",
-              transferAmount.toString()
-            )
-          )
-        );
       }
     }
 
@@ -374,7 +324,6 @@ contract GenesisStrategy is
     if (!hasWithdrawals) {
       $.isSettlementWithdrawal = false;
       _setStrategyStatus(StrategyStatus.IDLE);
-      emit DebugLog("No strategy assets to withdraw for settlement");
     }
   }
 
@@ -399,12 +348,10 @@ contract GenesisStrategy is
       _decreaseExpectedBalance(fromIdle);
 
       remaining -= fromIdle;
-      emit DebugLog(string(abi.encodePacked("Provided from idle: ", fromIdle.toString())));
     }
 
     // If fully satisfied from idle assets, we're done
     if (remaining == 0) {
-      emit DebugLog("Withdrawal request fully satisfied from idle assets");
       return;
     }
 
@@ -430,20 +377,6 @@ contract GenesisStrategy is
       _setStrategyStatus(StrategyStatus.DEUTILIZING);
       $.baseVolManager.withdrawFromClearingHouse(fromBaseVol);
 
-      emit DebugLog(
-        string(
-          abi.encodePacked(
-            "Requesting from BaseVol: ",
-            fromBaseVol.toString(),
-            " (total needed: ",
-            remaining.toString(),
-            ", morpho available: ",
-            morphoAvailable.toString(),
-            ")"
-          )
-        )
-      );
-
       // Callback will handle continuing to Morpho if needed
       return;
     } else if (morphoAvailable > 0) {
@@ -453,7 +386,6 @@ contract GenesisStrategy is
       _setStrategyStatus(StrategyStatus.DEUTILIZING);
       $.morphoVaultManager.withdrawFromMorpho(fromMorpho);
 
-      emit DebugLog(string(abi.encodePacked("Requesting from Morpho: ", fromMorpho.toString())));
       return;
     } else {
       // No additional assets available
@@ -662,11 +594,6 @@ contract GenesisStrategy is
     uint256 currentMorphoAssets = getMorphoAssets();
     if (currentMorphoAssets > 0) {
       $.morphoInitialBalance = currentMorphoAssets;
-      emit DebugLog(
-        string(
-          abi.encodePacked("Initialized morphoInitialBalance to ", currentMorphoAssets.toString())
-        )
-      );
     }
   }
 
@@ -680,11 +607,6 @@ contract GenesisStrategy is
     uint256 currentBaseVolAssets = getBaseVolAssets();
     if (currentBaseVolAssets > 0) {
       $.baseVolInitialBalance = currentBaseVolAssets;
-      emit DebugLog(
-        string(
-          abi.encodePacked("Initialized baseVolInitialBalance to ", currentBaseVolAssets.toString())
-        )
-      );
     }
   }
 
@@ -977,9 +899,6 @@ contract GenesisStrategy is
           // Profit detected
           uint256 profit = actualMorphoBalance - $.morphoInitialBalance;
           $.strategyBalance += profit;
-          emit DebugLog(
-            string(abi.encodePacked("Morpho profit detected (redeem): ", profit.toString()))
-          );
         } else {
           // Loss detected
           uint256 loss = $.morphoInitialBalance - actualMorphoBalance;
@@ -992,9 +911,6 @@ contract GenesisStrategy is
           } else {
             $.strategyBalance -= loss;
           }
-          emit DebugLog(
-            string(abi.encodePacked("Morpho loss detected (redeem): ", loss.toString()))
-          );
         }
         $.morphoInitialBalance = actualMorphoBalance;
       }
@@ -1177,18 +1093,6 @@ contract GenesisStrategy is
     if (currentBaseVol < targetBaseVol) {
       uint256 needed = targetBaseVol - currentBaseVol;
 
-      emit DebugLog(
-        string(
-          abi.encodePacked(
-            "Case 1: Increase BaseVol by ",
-            needed.toString(),
-            " (idle=",
-            idleAssets.toString(),
-            ")"
-          )
-        )
-      );
-
       // Use idle assets first
       if (idleAssets >= needed) {
         _depositToBaseVol(needed);
@@ -1205,7 +1109,6 @@ contract GenesisStrategy is
       }
 
       // Not enough assets to reach target - use all available
-      emit DebugLog("Insufficient assets to reach target BaseVol");
       _depositToBaseVol(idleAssets);
       if (currentMorpho > 0) {
         $.morphoVaultManager.withdrawFromMorpho(currentMorpho);
@@ -1217,18 +1120,6 @@ contract GenesisStrategy is
     if (currentBaseVol > targetBaseVol) {
       uint256 excess = currentBaseVol - targetBaseVol;
 
-      emit DebugLog(
-        string(
-          abi.encodePacked(
-            "Case 2: Decrease BaseVol by ",
-            excess.toString(),
-            " (idle=",
-            idleAssets.toString(),
-            ")"
-          )
-        )
-      );
-
       // Withdraw excess from BaseVol (will be deposited to Morpho via callback)
       $.baseVolManager.withdrawFromClearingHouse(excess);
       _depositToMorpho(idleAssets);
@@ -1236,10 +1127,6 @@ contract GenesisStrategy is
     }
 
     // Case 3: Already balanced, just utilize idle assets according to target ratio
-    emit DebugLog(
-      string(abi.encodePacked("Case 3: Already balanced, utilizing idle=", idleAssets.toString()))
-    );
-
     if (idleAssets > 0) {
       uint256 toBaseVol = idleAssets.mulDiv($.baseVolTargetPct, FLOAT_PRECISION);
       _depositToBaseVol(toBaseVol);
@@ -1264,19 +1151,6 @@ contract GenesisStrategy is
   ) internal {
     GenesisStrategyStorage.Layout storage $ = GenesisStrategyStorage.layout();
 
-    emit DebugLog(
-      string(
-        abi.encodePacked(
-          "Rebalancing without Morpho: CurrentBV=",
-          currentBaseVol.toString(),
-          " TargetBV=",
-          targetBaseVol.toString(),
-          " Idle=",
-          idleAssets.toString()
-        )
-      )
-    );
-
     // Case 1: Need to increase BaseVol (currently < 10%)
     if (currentBaseVol < targetBaseVol) {
       uint256 needed = targetBaseVol - currentBaseVol;
@@ -1291,15 +1165,11 @@ contract GenesisStrategy is
 
       // Withdraw excess from BaseVol to idle (will stay in strategy)
       $.baseVolManager.withdrawFromClearingHouse(excess);
-      emit DebugLog(
-        string(abi.encodePacked("Withdrawing ", excess.toString(), " from BaseVol to keep as idle"))
-      );
       // Callback will handle setting status back to IDLE
       return;
     }
 
     // Case 3: Already at target (10% BaseVol, 90% idle)
-    emit DebugLog("Already balanced at 10% BaseVol, 90% idle");
     _setStrategyStatus(StrategyStatus.IDLE);
   }
 
@@ -1327,7 +1197,6 @@ contract GenesisStrategy is
           // Profit detected
           uint256 profit = actualBaseVolBalance - $.baseVolInitialBalance;
           $.strategyBalance += profit;
-          emit DebugLog(string(abi.encodePacked("BaseVol profit detected: ", profit.toString())));
         } else {
           // Loss detected
           uint256 loss = $.baseVolInitialBalance - actualBaseVolBalance;
@@ -1340,7 +1209,6 @@ contract GenesisStrategy is
           } else {
             $.strategyBalance -= loss;
           }
-          emit DebugLog(string(abi.encodePacked("BaseVol loss detected: ", loss.toString())));
         }
         $.baseVolInitialBalance = actualBaseVolBalance;
       }
@@ -1376,21 +1244,11 @@ contract GenesisStrategy is
           _decreaseExpectedBalance(transferAmount);
         }
 
-        emit DebugLog(
-          string(
-            abi.encodePacked(
-              "Settlement withdrawal from BaseVol completed: ",
-              transferAmount.toString()
-            )
-          )
-        );
-
         // Check if all settlement withdrawals are complete (no more assets in BaseVol or Morpho)
         bool allWithdrawn = getBaseVolAssets() == 0 && getMorphoAssets() == 0;
         if (allWithdrawn) {
           $.isSettlementWithdrawal = false;
           _setStrategyStatus(StrategyStatus.IDLE);
-          emit DebugLog("All settlement withdrawals complete");
         }
 
         emit BaseVolDeutilize(_msgSender(), amount);
@@ -1405,21 +1263,10 @@ contract GenesisStrategy is
         // Track outgoing funds
         _decreaseExpectedBalance(amount);
 
-        emit DebugLog(
-          string(
-            abi.encodePacked(
-              "Deutilizing: Transferred ",
-              amount.toString(),
-              " from BaseVol to vault"
-            )
-          )
-        );
-
         // Check if all withdrawals are complete (no more assets in BaseVol or Morpho)
         bool allWithdrawn = getBaseVolAssets() == 0 && getMorphoAssets() == 0;
         if (allWithdrawn) {
           _setStrategyStatus(StrategyStatus.IDLE);
-          emit DebugLog("Deutilizing complete: All assets transferred to vault");
         }
 
         emit BaseVolDeutilize(_msgSender(), amount);
@@ -1455,35 +1302,12 @@ contract GenesisStrategy is
             uint256 fromMorpho = Math.min(stillNeeded, morphoAvailable);
             $.pendingWithdrawAmount = stillNeeded - fromMorpho; // Update remaining needed
             $.morphoVaultManager.withdrawFromMorpho(fromMorpho);
-            emit DebugLog(
-              string(
-                abi.encodePacked(
-                  "Continuing to Morpho: ",
-                  fromMorpho.toString(),
-                  " (still needed after: ",
-                  (stillNeeded - fromMorpho).toString(),
-                  ")"
-                )
-              )
-            );
             return; // Will continue in morphoWithdrawCompletedCallback
           }
         }
 
         // Clear pending amount as we're done (either fulfilled or no more sources)
         $.pendingWithdrawAmount = 0;
-        if (stillNeeded > 0) {
-          emit DebugLog(
-            string(
-              abi.encodePacked(
-                "Withdrawal partially fulfilled from BaseVol. Unfulfilled: ",
-                stillNeeded.toString()
-              )
-            )
-          );
-        } else {
-          emit DebugLog("Withdrawal request fully fulfilled from BaseVol");
-        }
       } else {
         // Normal operation: transfer assets back to vault
         IERC20(asset()).safeTransfer(address(vault()), amount);
@@ -1521,7 +1345,6 @@ contract GenesisStrategy is
           // Profit detected
           uint256 profit = actualMorphoBalance - $.morphoInitialBalance;
           $.strategyBalance += profit;
-          emit DebugLog(string(abi.encodePacked("Morpho profit detected: ", profit.toString())));
         } else {
           // Loss detected
           uint256 loss = $.morphoInitialBalance - actualMorphoBalance;
@@ -1534,7 +1357,6 @@ contract GenesisStrategy is
           } else {
             $.strategyBalance -= loss;
           }
-          emit DebugLog(string(abi.encodePacked("Morpho loss detected: ", loss.toString())));
         }
         $.morphoInitialBalance = actualMorphoBalance;
       }
@@ -1570,21 +1392,11 @@ contract GenesisStrategy is
           _decreaseExpectedBalance(transferAmount);
         }
 
-        emit DebugLog(
-          string(
-            abi.encodePacked(
-              "Settlement withdrawal from Morpho completed: ",
-              transferAmount.toString()
-            )
-          )
-        );
-
         // Check if all settlement withdrawals are complete (no more assets in BaseVol or Morpho)
         bool allWithdrawn = getBaseVolAssets() == 0 && getMorphoAssets() == 0;
         if (allWithdrawn) {
           $.isSettlementWithdrawal = false;
           _setStrategyStatus(StrategyStatus.IDLE);
-          emit DebugLog("All settlement withdrawals complete");
         }
 
         emit MorphoDeutilize(_msgSender(), amount);
@@ -1599,21 +1411,10 @@ contract GenesisStrategy is
         // Track outgoing funds
         _decreaseExpectedBalance(amount);
 
-        emit DebugLog(
-          string(
-            abi.encodePacked(
-              "Deutilizing: Transferred ",
-              amount.toString(),
-              " from Morpho to vault"
-            )
-          )
-        );
-
         // Check if all withdrawals are complete (no more assets in BaseVol or Morpho)
         bool allWithdrawn = getBaseVolAssets() == 0 && getMorphoAssets() == 0;
         if (allWithdrawn) {
           _setStrategyStatus(StrategyStatus.IDLE);
-          emit DebugLog("Deutilizing complete: All assets transferred to vault");
         }
 
         emit MorphoDeutilize(_msgSender(), amount);
@@ -1638,19 +1439,6 @@ contract GenesisStrategy is
         // Calculate if we still need more (should be 0 or very small)
         uint256 stillNeeded = remainingNeeded > amount ? remainingNeeded - amount : 0;
         $.pendingWithdrawAmount = 0; // Clear as Morpho is typically the final step
-
-        if (stillNeeded > 0) {
-          emit DebugLog(
-            string(
-              abi.encodePacked(
-                "Withdrawal request partially fulfilled from Morpho. Unfulfilled: ",
-                stillNeeded.toString()
-              )
-            )
-          );
-        } else {
-          emit DebugLog("Withdrawal request fully fulfilled from Morpho");
-        }
       } else {
         // Normal operation: this shouldn't happen for Morpho in current design
         // but handle it gracefully
@@ -1658,8 +1446,6 @@ contract GenesisStrategy is
 
         // Track outgoing funds
         _decreaseExpectedBalance(amount);
-
-        emit DebugLog("Morpho withdrawal outside of vault request");
       }
 
       emit MorphoDeutilize(_msgSender(), amount);
