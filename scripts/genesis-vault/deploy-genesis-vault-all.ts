@@ -225,6 +225,7 @@ async function step1_deployGenesisVault(
   await diamond.waitForDeployment();
   const diamondAddress = await diamond.getAddress();
   console.log("  ✅ Diamond deployed at:", diamondAddress);
+  await waitForContractCode(diamondAddress);
 
   // Add facets to Diamond
   console.log("\n🔧 Adding Facets to Diamond...");
@@ -236,61 +237,219 @@ async function step1_deployGenesisVault(
   const FacetCutAction = { Add: 0, Replace: 1, Remove: 2 };
   const cuts = [];
 
-  // Prepare all cuts
+  // Prepare all cuts and check for duplicate selectors
+  const allSelectors = new Map<string, string>(); // selector -> facet name
+
+  const diamondLoupeSelectors = await getSelectors(DiamondLoupeFacet.interface);
+  console.log(`  📋 DiamondLoupeFacet: ${diamondLoupeSelectors.length} selectors`);
+  if (diamondLoupeSelectors.length === 0) {
+    throw new Error("DiamondLoupeFacet has no selectors!");
+  }
+  for (const sel of diamondLoupeSelectors) {
+    if (allSelectors.has(sel)) {
+      console.log(`    ⚠️  Duplicate selector ${sel} (already in ${allSelectors.get(sel)})`);
+    }
+    allSelectors.set(sel, "DiamondLoupeFacet");
+  }
   cuts.push({
     facetAddress: diamondLoupeFacetAddress,
     action: FacetCutAction.Add,
-    functionSelectors: await getSelectors(DiamondLoupeFacet.interface),
+    functionSelectors: diamondLoupeSelectors,
   });
 
+  const erc20Selectors = await getSelectors(ERC20Facet.interface);
+  console.log(`  📋 ERC20Facet: ${erc20Selectors.length} selectors`);
+  for (const sel of erc20Selectors) {
+    if (allSelectors.has(sel)) {
+      console.log(`    ⚠️  Duplicate selector ${sel} (already in ${allSelectors.get(sel)})`);
+    }
+    allSelectors.set(sel, "ERC20Facet");
+  }
   cuts.push({
     facetAddress: erc20FacetAddress,
     action: FacetCutAction.Add,
-    functionSelectors: await getSelectors(ERC20Facet.interface),
+    functionSelectors: erc20Selectors,
   });
 
+  const genesisVaultViewSelectors = await getSelectors(GenesisVaultViewFacet.interface);
+  console.log(`  📋 GenesisVaultViewFacet: ${genesisVaultViewSelectors.length} selectors`);
+  for (const sel of genesisVaultViewSelectors) {
+    if (allSelectors.has(sel)) {
+      console.log(`    ⚠️  Duplicate selector ${sel} (already in ${allSelectors.get(sel)})`);
+    }
+    allSelectors.set(sel, "GenesisVaultViewFacet");
+  }
   cuts.push({
     facetAddress: genesisVaultViewFacetAddress,
     action: FacetCutAction.Add,
-    functionSelectors: await getSelectors(GenesisVaultViewFacet.interface),
+    functionSelectors: genesisVaultViewSelectors,
   });
 
+  const genesisVaultAdminSelectors = await getSelectors(GenesisVaultAdminFacet.interface);
+  console.log(`  📋 GenesisVaultAdminFacet: ${genesisVaultAdminSelectors.length} selectors`);
+  for (const sel of genesisVaultAdminSelectors) {
+    if (allSelectors.has(sel)) {
+      console.log(`    ⚠️  Duplicate selector ${sel} (already in ${allSelectors.get(sel)})`);
+    }
+    allSelectors.set(sel, "GenesisVaultAdminFacet");
+  }
   cuts.push({
     facetAddress: genesisVaultAdminFacetAddress,
     action: FacetCutAction.Add,
-    functionSelectors: await getSelectors(GenesisVaultAdminFacet.interface),
+    functionSelectors: genesisVaultAdminSelectors,
   });
 
+  const keeperSelectors = await getSelectors(KeeperFacet.interface);
+  console.log(`  📋 KeeperFacet: ${keeperSelectors.length} selectors`);
+  for (const sel of keeperSelectors) {
+    if (allSelectors.has(sel)) {
+      console.log(`    ⚠️  Duplicate selector ${sel} (already in ${allSelectors.get(sel)})`);
+    }
+    allSelectors.set(sel, "KeeperFacet");
+  }
   cuts.push({
     facetAddress: keeperFacetAddress,
     action: FacetCutAction.Add,
-    functionSelectors: await getSelectors(KeeperFacet.interface),
+    functionSelectors: keeperSelectors,
   });
 
+  const vaultCoreSelectors = await getSelectors(VaultCoreFacet.interface);
+  console.log(`  📋 VaultCoreFacet: ${vaultCoreSelectors.length} selectors`);
+  for (const sel of vaultCoreSelectors) {
+    if (allSelectors.has(sel)) {
+      console.log(`    ⚠️  Duplicate selector ${sel} (already in ${allSelectors.get(sel)})`);
+    }
+    allSelectors.set(sel, "VaultCoreFacet");
+  }
   cuts.push({
     facetAddress: vaultCoreFacetAddress,
     action: FacetCutAction.Add,
-    functionSelectors: await getSelectors(VaultCoreFacet.interface),
+    functionSelectors: vaultCoreSelectors,
   });
 
+  const settlementSelectors = await getSelectors(SettlementFacet.interface);
+  console.log(`  📋 SettlementFacet: ${settlementSelectors.length} selectors`);
+  for (const sel of settlementSelectors) {
+    if (allSelectors.has(sel)) {
+      console.log(`    ⚠️  Duplicate selector ${sel} (already in ${allSelectors.get(sel)})`);
+    }
+    allSelectors.set(sel, "SettlementFacet");
+  }
   cuts.push({
     facetAddress: settlementFacetAddress,
     action: FacetCutAction.Add,
-    functionSelectors: await getSelectors(SettlementFacet.interface),
+    functionSelectors: settlementSelectors,
   });
 
+  const initializationSelectors = await getSelectors(InitializationFacet.interface);
+  console.log(`  📋 InitializationFacet: ${initializationSelectors.length} selectors`);
+  for (const sel of initializationSelectors) {
+    if (allSelectors.has(sel)) {
+      console.log(`    ⚠️  Duplicate selector ${sel} (already in ${allSelectors.get(sel)})`);
+    }
+    allSelectors.set(sel, "InitializationFacet");
+  }
   cuts.push({
     facetAddress: initializationFacetAddress,
     action: FacetCutAction.Add,
-    functionSelectors: await getSelectors(InitializationFacet.interface),
+    functionSelectors: initializationSelectors,
   });
 
-  console.log(`  📊 Adding ${cuts.length} facets...`);
-  const tx = await diamondCut.diamondCut(cuts, ethers.ZeroAddress, "0x");
-  await tx.wait();
-  console.log("  ✅ All facets added to Diamond");
+  console.log(`\n  📊 Total: ${cuts.length} facets with ${allSelectors.size} unique selectors`);
+  console.log("  📦 Adding facets in batches to avoid gas limits...");
 
-  // Initialize vault
+  // Check for selector collisions
+  const selectorToFacet = new Map<string, string>();
+  for (const cut of cuts) {
+    const facetName =
+      cut.facetAddress === diamondLoupeFacetAddress
+        ? "DiamondLoupeFacet"
+        : cut.facetAddress === erc20FacetAddress
+          ? "ERC20Facet"
+          : cut.facetAddress === genesisVaultViewFacetAddress
+            ? "GenesisVaultViewFacet"
+            : cut.facetAddress === genesisVaultAdminFacetAddress
+              ? "GenesisVaultAdminFacet"
+              : cut.facetAddress === keeperFacetAddress
+                ? "KeeperFacet"
+                : cut.facetAddress === vaultCoreFacetAddress
+                  ? "VaultCoreFacet"
+                  : cut.facetAddress === settlementFacetAddress
+                    ? "SettlementFacet"
+                    : cut.facetAddress === initializationFacetAddress
+                      ? "InitializationFacet"
+                      : "Unknown";
+
+    for (const selector of cut.functionSelectors) {
+      if (selectorToFacet.has(selector)) {
+        throw new Error(
+          `Selector collision: ${selector} is in ${selectorToFacet.get(selector)} and ${facetName}`,
+        );
+      }
+      selectorToFacet.set(selector, facetName);
+    }
+  }
+
+  // Add facets in batches
+  const batchSize = 3;
+  for (let i = 0; i < cuts.length; i += batchSize) {
+    const batch = cuts.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    const totalBatches = Math.ceil(cuts.length / batchSize);
+
+    console.log(`\n  📤 Batch ${batchNum}/${totalBatches}: Adding ${batch.length} facets...`);
+
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        const tx = await diamondCut.diamondCut(batch, ethers.ZeroAddress, "0x");
+        console.log(`     Transaction hash: ${tx.hash}`);
+        await tx.wait();
+        console.log(`     ✅ Batch ${batchNum} completed`);
+        break;
+      } catch (error: any) {
+        console.error(`\n  ❌ Batch ${batchNum} failed! (Retries left: ${retries - 1})`);
+        console.error("  Error message:", error.message);
+        retries--;
+        if (retries === 0) throw error;
+        await new Promise((r) => setTimeout(r, 2000)); // Wait 2s before retry
+      }
+    }
+  }
+
+  console.log("\n  ✅ All facets added to Diamond");
+
+  // Verify initialization selector exists
+  const initSelector = InitializationFacet.interface.getFunction("initialize")?.selector;
+  if (!initSelector) throw new Error("Initialize selector not found");
+
+  console.log(`\n🔍 Verifying initialize selector ${initSelector}...`);
+  const loupe = await ethers.getContractAt(
+    "contracts/diamond-common/facets/DiamondLoupeFacet.sol:DiamondLoupeFacet",
+    diamondAddress,
+  );
+
+  let retriesVerify = 10;
+  while (retriesVerify > 0) {
+    try {
+      const facetAddr = await loupe.facetAddress(initSelector);
+      if (facetAddr !== ethers.ZeroAddress) {
+        console.log(`  ✅ Selector found at facet: ${facetAddr}`);
+        break;
+      }
+      console.log(`  ⏳ Selector not found yet... (Retries left: ${retriesVerify})`);
+    } catch (e) {
+      console.log(`  ⏳ Error checking selector... (Retries left: ${retriesVerify})`);
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+    retriesVerify--;
+  }
+
+  if (retriesVerify === 0) {
+    throw new Error("Initialize selector validation failed");
+  }
+
+  // Now call initialize directly through the Diamond
   console.log("\n🚀 Initializing GenesisVault...");
   const vault = await ethers.getContractAt(
     "contracts/genesis-vault/facets/GenesisVaultInitializationFacet.sol:GenesisVaultInitializationFacet",
@@ -362,6 +521,7 @@ async function step2_deployGenesisStrategy(
   await strategyContract.waitForDeployment();
   const strategyAddress = await strategyContract.getAddress();
   console.log("  ✅ GenesisStrategy deployed at:", strategyAddress);
+  await waitForContractCode(strategyAddress);
 
   // Set strategy on GenesisVault
   console.log("\n🔧 Setting strategy on GenesisVault...");
@@ -398,6 +558,7 @@ async function step3_deployBaseVolManager(
   await baseVolManager.waitForDeployment();
   const baseVolManagerAddress = await baseVolManager.getAddress();
   console.log("  ✅ BaseVolManager deployed at:", baseVolManagerAddress);
+  await waitForContractCode(baseVolManagerAddress);
 
   // Set BaseVolManager on GenesisStrategy
   console.log("\n🔧 Setting BaseVolManager on GenesisStrategy...");
