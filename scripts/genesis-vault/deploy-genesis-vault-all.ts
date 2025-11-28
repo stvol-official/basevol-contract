@@ -1,5 +1,6 @@
 import { ethers, network, run, upgrades } from "hardhat";
 import config from "../../config";
+import * as readline from "readline";
 
 /**
  * Unified Genesis Vault Deployment Script
@@ -94,10 +95,27 @@ async function getSelectors(contractInterface: any, excludeSelectors: string[] =
   return selectors;
 }
 
+// ============ User Input Helper ============
+async function getUserInput(prompt: string, defaultValue: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(`${prompt} (default: ${defaultValue}): `, (answer) => {
+      rl.close();
+      resolve(answer.trim() || defaultValue);
+    });
+  });
+}
+
 // ============ Step 1: Deploy GenesisVault Diamond ============
 async function step1_deployGenesisVault(
   owner: string,
   networkName: SupportedNetwork,
+  vaultName: string,
+  vaultSymbol: string,
 ): Promise<{ diamondAddress: string; facets: Omit<DeployedContracts, "diamond"> }> {
   console.log("\n" + "=".repeat(60));
   console.log("📦 STEP 1: Deploying GenesisVault Diamond");
@@ -281,8 +299,8 @@ async function step1_deployGenesisVault(
 
   const initTx = await vault.initialize(
     config.Address.Usdc[networkName], // asset
-    "Genesis Vault", // name
-    "gVAULT", // symbol
+    vaultName, // name
+    vaultSymbol, // symbol
     owner, // admin
     ethers.ZeroAddress, // baseVolContract (will be set later)
     ethers.ZeroAddress, // strategy (will be set later)
@@ -482,6 +500,13 @@ async function main() {
   console.log("Network:", networkName);
   console.log("=".repeat(60));
 
+  // Get vault name and symbol from user input
+  console.log("\n📝 Vault Configuration");
+  const vaultName = await getUserInput("Enter vault name", "Genesis Vault");
+  const vaultSymbol = await getUserInput("Enter vault symbol", "gVAULT");
+  console.log(`  ✅ Vault Name: ${vaultName}`);
+  console.log(`  ✅ Vault Symbol: ${vaultSymbol}`);
+
   // Check configuration
   if (config.Address.Usdc[networkName] === ethers.ZeroAddress) {
     throw new Error("Missing USDC address in config");
@@ -504,7 +529,12 @@ async function main() {
   const deploymentConfig = DEPLOYMENT_CONFIG[networkName];
 
   // Step 1: Deploy GenesisVault Diamond
-  const { diamondAddress, facets } = await step1_deployGenesisVault(deployer.address, networkName);
+  const { diamondAddress, facets } = await step1_deployGenesisVault(
+    deployer.address,
+    networkName,
+    vaultName,
+    vaultSymbol,
+  );
 
   // Step 2: Deploy GenesisStrategy
   const genesisStrategyAddress = await step2_deployGenesisStrategy(diamondAddress, networkName);
