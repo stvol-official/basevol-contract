@@ -66,6 +66,7 @@ contract SettlementFacet is IVaultErrors {
   );
   event EpochSettlementCompleted(uint256 indexed epoch);
   event DepositRefunded(address indexed user, uint256 indexed epoch, uint256 assets, string reason);
+  event SharePriceDeviationWarning(uint256 sharePrice, uint256 lastSharePrice, uint256 deviation);
 
   // ============ Custom Errors ============
   error RoundAlreadySettled(uint256 epoch);
@@ -194,7 +195,7 @@ contract SettlementFacet is IVaultErrors {
    * @dev Checks for zero price, min/max bounds, and deviation from last price
    * @param sharePrice The calculated share price to validate
    */
-  function _validateSharePrice(uint256 sharePrice) internal view {
+  function _validateSharePrice(uint256 sharePrice) internal {
     LibGenesisVaultStorage.Layout storage s = LibGenesisVaultStorage.layout();
 
     // Check 1: Share price cannot be zero
@@ -223,7 +224,7 @@ contract SettlementFacet is IVaultErrors {
       }
 
       if (deviation > MAX_DEVIATION_BPS) {
-        revert SharePriceDeviationTooHigh(sharePrice, lastSharePrice, deviation);
+        emit SharePriceDeviationWarning(sharePrice, lastSharePrice, deviation);
       }
     }
   }

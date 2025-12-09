@@ -18,5 +18,4 @@ interface IVaultErrors is ICommonErrors {
   error VaultCannotDeposit();
   error InsufficientShares();
   error InvalidSharePrice(uint256 sharePrice, string reason);
-  error SharePriceDeviationTooHigh(uint256 currentPrice, uint256 lastPrice, uint256 deviation);
 }
