@@ -915,9 +915,17 @@ contract GenesisStrategy is
         $.morphoInitialBalance = actualMorphoBalance;
       }
 
-      // Update state after profit/loss calculation
-      $.strategyBalance -= assets;
-      $.morphoInitialBalance -= assets;
+      // Update state after profit/loss calculation (safe decrease to prevent underflow)
+      if ($.strategyBalance >= assets) {
+        $.strategyBalance -= assets;
+      } else {
+        $.strategyBalance = 0;
+      }
+      if ($.morphoInitialBalance >= assets) {
+        $.morphoInitialBalance -= assets;
+      } else {
+        $.morphoInitialBalance = 0;
+      }
 
       emit MorphoDeutilize(_msgSender(), assets);
     }
@@ -1213,9 +1221,17 @@ contract GenesisStrategy is
         $.baseVolInitialBalance = actualBaseVolBalance;
       }
 
-      // Update state after profit/loss calculation
-      $.strategyBalance -= amount;
-      $.baseVolInitialBalance -= amount;
+      // Update state after profit/loss calculation (safe decrease to prevent underflow)
+      if ($.strategyBalance >= amount) {
+        $.strategyBalance -= amount;
+      } else {
+        $.strategyBalance = 0;
+      }
+      if ($.baseVolInitialBalance >= amount) {
+        $.baseVolInitialBalance -= amount;
+      } else {
+        $.baseVolInitialBalance = 0;
+      }
 
       // Check if this is a settlement withdrawal
       if ($.isSettlementWithdrawal) {
@@ -1361,9 +1377,17 @@ contract GenesisStrategy is
         $.morphoInitialBalance = actualMorphoBalance;
       }
 
-      // Update state after profit/loss calculation
-      $.strategyBalance -= amount;
-      $.morphoInitialBalance -= amount;
+      // Update state after profit/loss calculation (safe decrease to prevent underflow)
+      if ($.strategyBalance >= amount) {
+        $.strategyBalance -= amount;
+      } else {
+        $.strategyBalance = 0;
+      }
+      if ($.morphoInitialBalance >= amount) {
+        $.morphoInitialBalance -= amount;
+      } else {
+        $.morphoInitialBalance = 0;
+      }
 
       // Check if this is a settlement withdrawal
       if ($.isSettlementWithdrawal) {
