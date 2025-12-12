@@ -7,7 +7,7 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-const DEPLOYED_PROXY = "0x6F5B12b9b041BC76e8B680219BD2d67c62F95972"; // for testnet - update with actual deployed proxy address
+const DEPLOYED_PROXY = "0x409433B9A91009DBC4878F70dD5DF26D37d4A8Df"; // for testnet - update with actual deployed proxy address
 // const DEPLOYED_PROXY = "0x..."; // for mainnet - update with actual deployed proxy address
 
 function sleep(ms: number) {
@@ -39,13 +39,27 @@ const upgrade = async () => {
     const GenesisStrategyFactory = await ethers.getContractFactory(contractName);
 
     // Force import existing proxy to avoid storage layout conflicts
+    console.log("Importing existing proxy...");
     await upgrades.forceImport(PROXY, GenesisStrategyFactory, { kind: "uups" });
+    console.log("Proxy imported successfully");
 
     // Upgrade the proxy with new implementation
-    const contract = await upgrades.upgradeProxy(PROXY, GenesisStrategyFactory, {
-      kind: "uups",
-      redeployImplementation: "always",
-    });
+    console.log("Upgrading proxy...");
+    let contract;
+    try {
+      contract = await upgrades.upgradeProxy(PROXY, GenesisStrategyFactory, {
+        kind: "uups",
+        redeployImplementation: "always",
+      });
+      console.log("Upgrade transaction sent");
+    } catch (error: any) {
+      console.error("❌ Upgrade failed with error:");
+      console.error("Error message:", error.message);
+      if (error.reason) console.error("Reason:", error.reason);
+      if (error.code) console.error("Code:", error.code);
+      if (error.data) console.error("Data:", error.data);
+      throw error;
+    }
 
     await contract.waitForDeployment();
     const contractAddress = await contract.getAddress();
@@ -108,7 +122,7 @@ const upgrade = async () => {
       }
     } catch (error: any) {
       console.log("\n⚠️  Could not initialize baseVolInitialBalance automatically.");
-      if (error.message?.includes("Already initialized")) {
+      if (error.message?.includes("BaseVol already initialized")) {
         console.log("✅ baseVolInitialBalance was already initialized.");
       } else {
         console.log("Please call initializeBaseVolBalance() manually if needed.");
