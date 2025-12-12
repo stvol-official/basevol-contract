@@ -187,7 +187,8 @@ contract SettlementFacet is IVaultErrors {
     }
 
     // Share price = (total assets per share) scaled by share decimals
-    return (vaultTotalAssets * (10 ** s.decimals)) / vaultTotalSupply;
+    // Use mulDiv to prevent overflow when vaultTotalAssets is very large
+    return Math.mulDiv(vaultTotalAssets, 10 ** s.decimals, vaultTotalSupply);
   }
 
   /**
@@ -438,7 +439,8 @@ contract SettlementFacet is IVaultErrors {
     }
 
     // Calculate shares to mint using epoch-specific share price
-    uint256 sharesToMint = (claimableAssets * (10 ** s.decimals)) / roundData.sharePrice;
+    // Use mulDiv to prevent overflow when claimableAssets is very large
+    uint256 sharesToMint = Math.mulDiv(claimableAssets, 10 ** s.decimals, roundData.sharePrice);
 
     // SECURITY: Zero share prevention (donation attack prevention)
     // Refund instead of revert to prevent griefing attack
@@ -483,7 +485,8 @@ contract SettlementFacet is IVaultErrors {
     if (claimableShares == 0) return;
 
     // Calculate assets to transfer using epoch-specific share price
-    uint256 grossAssets = (claimableShares * roundData.sharePrice) / (10 ** s.decimals);
+    // Use mulDiv to prevent overflow when claimableShares or sharePrice is very large
+    uint256 grossAssets = Math.mulDiv(claimableShares, roundData.sharePrice, 10 ** s.decimals);
 
     // Calculate and charge performance fee for this redemption
     uint256 performanceFeeAmount = _calculateAndChargePerformanceFee(
@@ -554,7 +557,8 @@ contract SettlementFacet is IVaultErrors {
 
     // Calculate fee rate based on elapsed time
     uint256 feeRate = (s.managementFee * timeElapsed) / (365 days);
-    uint256 feeShares = (currentTotalSupply * feeRate) / FLOAT_PRECISION;
+    // Use mulDiv to prevent overflow when currentTotalSupply is very large
+    uint256 feeShares = Math.mulDiv(currentTotalSupply, feeRate, FLOAT_PRECISION);
 
     if (feeShares == 0) {
       feeData.lastFeeTimestamp = block.timestamp;
@@ -586,9 +590,10 @@ contract SettlementFacet is IVaultErrors {
     if (currentShares == 0) {
       userData.waep = currentSharePrice;
     } else {
-      userData.waep =
-        (userData.waep * currentShares + currentSharePrice * newShares) /
-        (currentShares + newShares);
+      // Use mulDiv to prevent overflow when calculating weighted average entry price
+      // WAEP = (waep_prev * shares_prev + sharePrice_current * shares_new) / (shares_prev + shares_new)
+      uint256 numerator = userData.waep * currentShares + currentSharePrice * newShares;
+      userData.waep = numerator / (currentShares + newShares);
     }
 
     userData.totalShares = currentShares + newShares;
@@ -618,7 +623,8 @@ contract SettlementFacet is IVaultErrors {
 
     // Calculate profit per share
     uint256 profitPerShare = currentSharePrice - userData.waep;
-    uint256 totalProfit = (profitPerShare * withdrawShares) / (10 ** s.decimals);
+    // Use mulDiv to prevent overflow when withdrawShares is very large
+    uint256 totalProfit = Math.mulDiv(profitPerShare, withdrawShares, 10 ** s.decimals);
 
     // Calculate fee amount
     // FIX: Use 1e18 instead of (10 ** s.decimals) to match VaultCoreFacet.sol:779

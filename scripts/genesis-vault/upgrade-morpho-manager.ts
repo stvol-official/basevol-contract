@@ -7,7 +7,7 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-const DEPLOYED_PROXY = "0xEb1929190C8DecB97Fb0744A818a3C4D9d2d0455"; // update with actual deployed address
+const DEPLOYED_PROXY = "0xEb1929190C8DecB97Fb0744A818a3C4D9d2d0455"; // for mainnet - update with actual deployed address
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -26,9 +26,20 @@ const upgrade = async () => {
     },
   });
 
+  const isSafeOwner = await input({
+    message: "Is the owner a Safe address? (Y/N)",
+    default: "N",
+    validate: (val) => {
+      return ["Y", "N", "y", "n", "yes", "no"].includes(val) || "Please enter Y or N";
+    },
+  });
+
+  const isSafeOwnerBool = isSafeOwner.toUpperCase() === "Y" || isSafeOwner.toUpperCase() === "YES";
+
   // Check if the network is supported.
   if (NETWORK.includes(networkName)) {
     console.log(`Upgrading ${contractName} on ${networkName} network...`);
+    console.log(`Safe Owner: ${isSafeOwnerBool ? "Yes" : "No"}`);
 
     // Compile contracts.
     await run("compile");
@@ -45,21 +56,83 @@ const upgrade = async () => {
       console.log("Force import not needed or failed:", error.message);
     }
 
-    // Upgrade the proxy
-    const contract = await upgrades.upgradeProxy(PROXY, MorphoVaultManagerFactory, {
-      kind: "uups",
-      redeployImplementation: "always",
-    });
+    let contractAddress: string;
+    let contract: any;
 
-    await contract.waitForDeployment();
-    const contractAddress = await contract.getAddress();
-    console.log(`🍣 ${contractName} Contract upgraded at ${contractAddress}`);
+    if (isSafeOwnerBool) {
+      // Safe 계정일 때: 새 구현만 배포하고 Safe UI에서 실행하도록 안내
+      console.log("\n🔐 Safe 계정을 통한 업그레이드");
+      console.log("=".repeat(60));
 
+      console.log("Preparing upgrade (deploying new implementation only)...");
+      try {
+        const implementationAddress = await upgrades.prepareUpgrade(
+          PROXY,
+          MorphoVaultManagerFactory,
+          {
+            kind: "uups",
+            redeployImplementation: "always",
+          },
+        );
+        // prepareUpgrade returns a Promise<string> or string
+        contractAddress =
+          typeof implementationAddress === "string"
+            ? implementationAddress
+            : (implementationAddress as any).address || String(implementationAddress);
+        console.log(`✅ New implementation contract deployed at: ${contractAddress}`);
+        console.log("\n📋 Safe에서 업그레이드를 실행하세요:");
+        console.log("=".repeat(60));
+        console.log("1. https://app.safe.global/ 또는 https://safe.optimism.io/ 접속");
+        console.log("2. 'New transaction' 클릭");
+        console.log("3. 'Contract interaction' 선택");
+        console.log("4. Contract address:", PROXY);
+        console.log("5. ABI 입력:");
+        console.log(
+          `[{"inputs":[{"internalType":"address","name":"newImplementation","type":"address"},{"internalType":"bytes","name":"data","type":"bytes"}],"name":"upgradeToAndCall","outputs":[],"stateMutability":"nonpayable","type":"function"}]`,
+        );
+        console.log("6. Method: upgradeToAndCall 선택");
+        console.log("7. Parameters 입력:");
+        console.log(`   newImplementation: ${contractAddress}`);
+        console.log("   data: 0x");
+        console.log("8. 트랜잭션 생성 후 멀티시그 서명");
+        console.log("9. 실행");
+      } catch (error: any) {
+        console.error("❌ Prepare upgrade failed with error:");
+        console.error("Error message:", error.message);
+        if (error.reason) console.error("Reason:", error.reason);
+        if (error.code) console.error("Code:", error.code);
+        if (error.data) console.error("Data:", error.data);
+        throw error;
+      }
+    } else {
+      // 일반 계정일 때: 자동 업그레이드 실행
+      console.log("Upgrading proxy...");
+      try {
+        contract = await upgrades.upgradeProxy(PROXY, MorphoVaultManagerFactory, {
+          kind: "uups",
+          redeployImplementation: "always",
+        });
+        console.log("Upgrade transaction sent");
+      } catch (error: any) {
+        console.error("❌ Upgrade failed with error:");
+        console.error("Error message:", error.message);
+        if (error.reason) console.error("Reason:", error.reason);
+        if (error.code) console.error("Code:", error.code);
+        if (error.data) console.error("Data:", error.data);
+        throw error;
+      }
+
+      await contract.waitForDeployment();
+      contractAddress = await contract.getAddress();
+      console.log(`🍣 ${contractName} Contract upgraded at ${contractAddress}`);
+    }
+
+    // Contract verification
     const network = await ethers.getDefaultProvider().getNetwork();
 
     await sleep(6000);
 
-    console.log("Verifying contracts...");
+    console.log("\n🔍 Verifying contracts...");
     try {
       await run("verify:verify", {
         address: contractAddress,
@@ -67,12 +140,19 @@ const upgrade = async () => {
         contract: `contracts/core/vault/${contractName}.sol:${contractName}`,
         constructorArguments: [],
       });
-      console.log("Contract verification completed");
+      console.log("✅ Contract verification completed");
     } catch (error: any) {
-      console.log("Verification failed:", error.message);
+      if (
+        error.message?.includes("Already Verified") ||
+        error.message?.includes("already verified")
+      ) {
+        console.log("ℹ️  Contract is already verified");
+      } else {
+        console.log("⚠️  Contract verification failed:", error.message);
+      }
     }
 
-    console.log("Upgrade completed successfully!");
+    console.log("\n✅ Upgrade completed successfully!");
   } else {
     console.log(`Upgrading on ${networkName} network is not supported...`);
   }

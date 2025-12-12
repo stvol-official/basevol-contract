@@ -14,7 +14,7 @@ type SupportedNetwork = (typeof NETWORK)[number];
 // Genesis Vault Diamond addresses by network
 const GENESIS_VAULT_ADDRESSES = {
   base_sepolia: "0x640F0323257274883823b12b6C52e0aD809c3C59", // Update after deployment
-  base: "", // Update after deployment
+  base: "0xf1BE2622fd0f34d520Ab31019A4ad054a2c4B1e0", // Update after deployment
 };
 
 // Available Genesis Vault facets for upgrade
@@ -230,6 +230,16 @@ const main = async () => {
     },
   });
 
+  const isSafeOwner = await input({
+    message: "Is the Diamond owner a Safe address? (Y/N)",
+    default: "N",
+    validate: (val) => {
+      return ["Y", "N", "y", "n", "yes", "no"].includes(val) || "Please enter Y or N";
+    },
+  });
+
+  const isSafeOwnerBool = isSafeOwner.toUpperCase() === "Y" || isSafeOwner.toUpperCase() === "YES";
+
   // 2. Select facets to upgrade (multiple selection)
   const selectedFacets = await checkbox({
     message: "Select the facets to analyze and upgrade (use Space to select, Enter to confirm)",
@@ -249,6 +259,7 @@ const main = async () => {
   console.log("Network:", networkName);
   console.log("Genesis Vault Diamond Address:", DIAMOND_ADDRESS);
   console.log("Selected Facets:", selectedFacets.map((f: any) => f.name).join(", "));
+  console.log("Safe Owner:", isSafeOwnerBool ? "Yes" : "No");
   console.log("===========================================");
 
   // Compile contracts.
@@ -324,164 +335,272 @@ const main = async () => {
     return;
   }
 
-  // 5. Execution confirmation
-  const confirmation = await input({
-    message: `Proceed with ${totalCuts.length} cut operation(s)? (yes/no)`,
-    validate: (val) => {
-      return ["yes", "no", "y", "n"].includes(val.toLowerCase()) || "Please enter yes or no";
-    },
-  });
+  // Safe 계정일 때 처리
+  if (isSafeOwnerBool) {
+    console.log("\n🔐 Safe 멀티시그를 통한 업그레이드");
+    console.log("=".repeat(60));
 
-  if (!["yes", "y"].includes(confirmation.toLowerCase())) {
-    console.log("❌ Operation cancelled");
-    return;
-  }
+    // Facet 주소들 출력
+    console.log("\n📦 배포된 Facet 주소들:");
+    facetAnalyses.forEach((analysis, index) => {
+      if (analysis.cuts.length > 0) {
+        console.log(`${index + 1}. ${analysis.name}: ${analysis.newFacetAddress}`);
+      }
+    });
 
-  // 6. Execute Diamond Cut
-  console.log(`\n🔄 Executing ${totalCuts.length} diamond cut operation(s)...`);
+    console.log("\n🔧 Safe에서 실행할 Diamond Cut 데이터:");
+    console.log("=".repeat(60));
 
-  console.log("Operations to be executed:");
-  totalCuts.forEach((cut, index) => {
-    const actionName =
-      cut.action === FacetCutAction.Add
-        ? "ADD"
-        : cut.action === FacetCutAction.Replace
-          ? "REPLACE"
-          : "REMOVE";
+    const diamondCutData = totalCuts.map((cut) => [
+      cut.facetAddress, // address
+      cut.action, // uint8
+      cut.functionSelectors, // bytes4[]
+    ]);
+
+    const diamondCutInterface = new ethers.Interface([
+      "function diamondCut(tuple(address,uint8,bytes4[])[] _diamondCut, address _init, bytes _calldata) external",
+    ]);
+
+    const data = diamondCutInterface.encodeFunctionData("diamondCut", [
+      diamondCutData,
+      ethers.ZeroAddress,
+      "0x",
+    ]);
+
+    console.log("📱 Safe 사용법 (Raw 트랜잭션 방법):");
+    console.log("1. https://app.safe.global/ 또는 https://safe.optimism.io/ 접속");
+    console.log("2. 'New transaction' 클릭");
+    console.log("3. 'Transaction Builder' 선택");
+    console.log("4. 'Custom data toggle");
+    console.log("4. 다음 정보를 입력:");
+    console.log("   Enter Address:", DIAMOND_ADDRESS);
+    console.log("   ABI:");
+    console.log("   To:", DIAMOND_ADDRESS);
+    console.log("   ETH Value: 0");
+    console.log("   Data(Hex encoded):", data);
+    console.log("5. 트랜잭션 생성 후 멀티시그 서명");
+    console.log("6. 실행");
+
+    console.log("\n📋 대안 방법 (Contract Interaction):");
+    console.log("1. 'New transaction' 클릭");
+    console.log("2. 'Contract interaction' 선택");
+    console.log("3. Contract address:", DIAMOND_ADDRESS);
+    console.log("4. ABI 입력:");
     console.log(
-      `  ${index + 1}. ${actionName}: ${cut.functionSelectors.length} selectors to ${cut.facetAddress}`,
+      `[{"inputs":[{"components":[{"internalType":"address","name":"facetAddress","type":"address"},{"internalType":"enum IDiamondCut.FacetCutAction","name":"action","type":"uint8"},{"internalType":"bytes4[]","name":"functionSelectors","type":"bytes4[]"}],"internalType":"struct IDiamondCut.FacetCut[]","name":"_diamondCut","type":"tuple[]"},{"internalType":"address","name":"_init","type":"address"},{"internalType":"bytes","name":"_calldata","type":"bytes"}],"name":"diamondCut","outputs":[],"stateMutability":"nonpayable","type":"function"}]`,
     );
-  });
+    console.log("5. Method: diamondCut 선택");
+    console.log("6. Parameters를 하나씩 입력:");
+    console.log("   _diamondCut: [");
+    diamondCutData.forEach((cut: any, index: number) => {
+      console.log(`     [`);
+      console.log(`       "${cut[0]}",`);
+      console.log(`       ${cut[1]},`);
+      console.log(`       [${cut[2].map((s: string) => `"${s}"`).join(", ")}]`);
+      console.log(`     ]${index < diamondCutData.length - 1 ? "," : ""}`);
+    });
+    console.log("   ]");
+    console.log("   _init: 0x0000000000000000000000000000000000000000");
+    console.log("   _calldata: 0x");
 
-  const diamondCut = await ethers.getContractAt(
-    "contracts/diamond-common/interfaces/IDiamondCut.sol:IDiamondCut",
-    DIAMOND_ADDRESS,
-  );
+    console.log("\n⚠️  주의사항:");
+    console.log("- Raw 트랜잭션 방법(첫 번째)을 권장합니다");
+    console.log("- action 값: 0=Add, 1=Replace, 2=Remove");
+    console.log("- 모든 Facet이 정상적으로 배포되었는지 확인하세요");
 
-  try {
-    const tx = await diamondCut.diamondCut(totalCuts, ethers.ZeroAddress, "0x");
-    console.log("Diamond cut tx:", tx.hash);
+    console.log("\n🔍 Verifying deployed facets on block explorer...");
 
-    const receipt = await tx.wait();
-    if (!receipt || receipt.status !== 1) {
-      throw Error(`Diamond upgrade failed: ${tx.hash}`);
-    }
+    const networkInfo = await ethers.getDefaultProvider().getNetwork();
 
-    console.log("✅ Diamond cut completed successfully!");
-  } catch (error: any) {
-    console.error("❌ Diamond cut failed:", error);
+    for (const analysis of facetAnalyses) {
+      if (analysis.cuts.length === 0) continue;
 
-    // Try to decode common revert reasons
-    if (error.data) {
-      try {
-        const iface = new ethers.Interface([
-          "error LibDiamond__NoSelectorsProvidedForFacetForCut(address facet)",
-          "error LibDiamond__CannotAddSelectorsToZeroAddress(bytes4[] selectors)",
-          "error LibDiamond__NoBytecodeAtAddress(address contractAddress, string message)",
-          "error LibDiamond__IncorrectFacetCutAction(uint8 action)",
-          "error LibDiamond__CannotAddFunctionToDiamondThatAlreadyExists(bytes4 selector)",
-          "error LibDiamond__CannotReplaceFunctionsFromFacetWithZeroAddress(bytes4[] selectors)",
-          "error LibDiamond__CannotReplaceImmutableFunction(bytes4 selector)",
-          "error LibDiamond__CannotReplaceFunctionWithTheSameFunctionFromTheSameFacet(bytes4 selector)",
-          "error LibDiamond__CannotReplaceFunctionThatDoesNotExists(bytes4 selector)",
-          "error LibDiamond__RemoveFacetAddressMustBeZeroAddress(address facetAddress)",
-          "error LibDiamond__CannotRemoveFunctionThatDoesNotExist(bytes4 selector)",
-          "error LibDiamond__CannotRemoveImmutableFunction(bytes4 selector)",
-          "error LibDiamond__InitializationFunctionReverted(address initializationContractAddress, bytes _calldata)",
-        ]);
-        const decodedError = iface.parseError(error.data);
-        console.error("Decoded error:", decodedError);
-      } catch (decodeError) {
-        console.error("Could not decode error data");
-      }
-    }
-    return;
-  }
+      console.log(`\nVerifying ${analysis.name}...`);
+      await sleep(2000); // Rate limiting
 
-  // Wait for network propagation
-  console.log("\n⏳ Waiting for network state to propagate (3 seconds)...");
-  await sleep(3000);
-
-  // 7. Verify upgrades
-  console.log("\n🔍 Verifying upgrades...");
-  const diamondLoupe = await ethers.getContractAt(
-    "contracts/diamond-common/interfaces/IDiamondLoupe.sol:IDiamondLoupe",
-    DIAMOND_ADDRESS,
-  );
-
-  for (const analysis of facetAnalyses) {
-    if (analysis.cuts.length === 0) continue;
-
-    console.log(`\n📋 Verifying ${analysis.name}...`);
-
-    try {
-      // Check if all selectors of new facet are properly registered
-      const allSelectors = [...analysis.newSelectors, ...analysis.existingSelectors];
-
-      for (const selector of allSelectors) {
-        const facetAddress = await diamondLoupe.facetAddress(selector);
-        if (facetAddress === analysis.newFacetAddress) {
-          console.log(`   ✅ Selector ${selector} correctly points to new facet`);
-        } else {
-          console.log(`   ❌ Selector ${selector} verification failed!`);
-          console.log(`      Expected: ${analysis.newFacetAddress}`);
-          console.log(`      Actual: ${facetAddress}`);
-        }
-      }
-    } catch (error) {
-      console.log(`⚠️  Could not verify ${analysis.name}:`, error);
-    }
-  }
-
-  // 8. Function testing
-  console.log("\n🧪 Testing upgraded facets...");
-  for (const analysis of facetAnalyses) {
-    if (analysis.cuts.length === 0) continue;
-
-    console.log(`Testing ${analysis.name}...`);
-    try {
       const facetPath = AVAILABLE_FACETS.find((f) => f.name === analysis.name)?.path;
       if (facetPath) {
-        const facetContract = await ethers.getContractAt(facetPath, DIAMOND_ADDRESS);
-        console.log(`✅ ${analysis.name} functions are accessible`);
+        try {
+          await run("verify:verify", {
+            address: analysis.newFacetAddress,
+            network: networkInfo,
+            contract: facetPath,
+            constructorArguments: [],
+          });
+          console.log(`   ✅ ${analysis.name} verified`);
+        } catch (error: any) {
+          if (
+            error.message?.includes("Already Verified") ||
+            error.message?.includes("already verified")
+          ) {
+            console.log(`   ✅ ${analysis.name} already verified`);
+          } else {
+            console.log(`   ⚠️  ${analysis.name} verification failed:`, error.message);
+          }
+        }
       }
-    } catch (error) {
-      console.log(`⚠️  Could not test ${analysis.name} functions:`, error);
     }
-  }
+  } else {
+    // 일반 계정일 때: 자동 실행
+    // 5. Execution confirmation
+    const confirmation = await input({
+      message: `Proceed with ${totalCuts.length} cut operation(s)? (yes/no)`,
+      validate: (val) => {
+        return ["yes", "no", "y", "n"].includes(val.toLowerCase()) || "Please enter yes or no";
+      },
+    });
 
-  // 9. Contract verification on block explorer
-  console.log("\n🔍 Verifying contracts on block explorer...");
-  console.log("⏳ Waiting for block explorer indexing (6 seconds)...");
-  await sleep(6000);
+    if (!["yes", "y"].includes(confirmation.toLowerCase())) {
+      console.log("❌ Operation cancelled");
+      return;
+    }
 
-  const networkInfo = await ethers.getDefaultProvider().getNetwork();
+    // 6. Execute Diamond Cut
+    console.log(`\n🔄 Executing ${totalCuts.length} diamond cut operation(s)...`);
 
-  for (const analysis of facetAnalyses) {
-    if (analysis.cuts.length === 0) continue;
+    console.log("Operations to be executed:");
+    totalCuts.forEach((cut, index) => {
+      const actionName =
+        cut.action === FacetCutAction.Add
+          ? "ADD"
+          : cut.action === FacetCutAction.Replace
+            ? "REPLACE"
+            : "REMOVE";
+      console.log(
+        `  ${index + 1}. ${actionName}: ${cut.functionSelectors.length} selectors to ${cut.facetAddress}`,
+      );
+    });
 
-    console.log(`\n📝 Verifying ${analysis.name}...`);
+    const diamondCut = await ethers.getContractAt(
+      "contracts/diamond-common/interfaces/IDiamondCut.sol:IDiamondCut",
+      DIAMOND_ADDRESS,
+    );
 
     try {
-      const facetPath = AVAILABLE_FACETS.find((f) => f.name === analysis.name)?.path;
-      await run("verify:verify", {
-        address: analysis.newFacetAddress,
-        network: networkInfo,
-        contract: facetPath,
-        constructorArguments: [],
-      });
-      console.log(`✅ ${analysis.name} verified`);
+      const tx = await diamondCut.diamondCut(totalCuts, ethers.ZeroAddress, "0x");
+      console.log("Diamond cut tx:", tx.hash);
+
+      const receipt = await tx.wait();
+      if (!receipt || receipt.status !== 1) {
+        throw Error(`Diamond upgrade failed: ${tx.hash}`);
+      }
+
+      console.log("✅ Diamond cut completed successfully!");
     } catch (error: any) {
-      if (error.message.includes("Already Verified")) {
-        console.log(`✅ ${analysis.name} already verified`);
-      } else {
-        console.log(`⚠️ ${analysis.name} verification failed:`, error.message);
+      console.error("❌ Diamond cut failed:", error);
+
+      // Try to decode common revert reasons
+      if (error.data) {
+        try {
+          const iface = new ethers.Interface([
+            "error LibDiamond__NoSelectorsProvidedForFacetForCut(address facet)",
+            "error LibDiamond__CannotAddSelectorsToZeroAddress(bytes4[] selectors)",
+            "error LibDiamond__NoBytecodeAtAddress(address contractAddress, string message)",
+            "error LibDiamond__IncorrectFacetCutAction(uint8 action)",
+            "error LibDiamond__CannotAddFunctionToDiamondThatAlreadyExists(bytes4 selector)",
+            "error LibDiamond__CannotReplaceFunctionsFromFacetWithZeroAddress(bytes4[] selectors)",
+            "error LibDiamond__CannotReplaceImmutableFunction(bytes4 selector)",
+            "error LibDiamond__CannotReplaceFunctionWithTheSameFunctionFromTheSameFacet(bytes4 selector)",
+            "error LibDiamond__CannotReplaceFunctionThatDoesNotExists(bytes4 selector)",
+            "error LibDiamond__RemoveFacetAddressMustBeZeroAddress(address facetAddress)",
+            "error LibDiamond__CannotRemoveFunctionThatDoesNotExist(bytes4 selector)",
+            "error LibDiamond__CannotRemoveImmutableFunction(bytes4 selector)",
+            "error LibDiamond__InitializationFunctionReverted(address initializationContractAddress, bytes _calldata)",
+          ]);
+          const decodedError = iface.parseError(error.data);
+          console.error("Decoded error:", decodedError);
+        } catch (decodeError) {
+          console.error("Could not decode error data");
+        }
+      }
+      return;
+    }
+
+    // Wait for network propagation
+    console.log("\n⏳ Waiting for network state to propagate (3 seconds)...");
+    await sleep(3000);
+
+    // 7. Verify upgrades
+    console.log("\n🔍 Verifying upgrades...");
+    const diamondLoupe = await ethers.getContractAt(
+      "contracts/diamond-common/interfaces/IDiamondLoupe.sol:IDiamondLoupe",
+      DIAMOND_ADDRESS,
+    );
+
+    for (const analysis of facetAnalyses) {
+      if (analysis.cuts.length === 0) continue;
+
+      console.log(`\n📋 Verifying ${analysis.name}...`);
+
+      try {
+        // Check if all selectors of new facet are properly registered
+        const allSelectors = [...analysis.newSelectors, ...analysis.existingSelectors];
+
+        for (const selector of allSelectors) {
+          const facetAddress = await diamondLoupe.facetAddress(selector);
+          if (facetAddress === analysis.newFacetAddress) {
+            console.log(`   ✅ Selector ${selector} correctly points to new facet`);
+          } else {
+            console.log(`   ❌ Selector ${selector} verification failed!`);
+            console.log(`      Expected: ${analysis.newFacetAddress}`);
+            console.log(`      Actual: ${facetAddress}`);
+          }
+        }
+      } catch (error) {
+        console.log(`⚠️  Could not verify ${analysis.name}:`, error);
       }
     }
-  }
 
-  console.log("\n✅ Contract verification process completed!");
-  console.log("Note: Some contracts may already be verified or may take time to be indexed.");
+    // 8. Function testing
+    console.log("\n🧪 Testing upgraded facets...");
+    for (const analysis of facetAnalyses) {
+      if (analysis.cuts.length === 0) continue;
+
+      console.log(`Testing ${analysis.name}...`);
+      try {
+        const facetPath = AVAILABLE_FACETS.find((f) => f.name === analysis.name)?.path;
+        if (facetPath) {
+          const facetContract = await ethers.getContractAt(facetPath, DIAMOND_ADDRESS);
+          console.log(`✅ ${analysis.name} functions are accessible`);
+        }
+      } catch (error) {
+        console.log(`⚠️  Could not test ${analysis.name} functions:`, error);
+      }
+    }
+
+    // 9. Contract verification on block explorer
+    console.log("\n🔍 Verifying contracts on block explorer...");
+    console.log("⏳ Waiting for block explorer indexing (6 seconds)...");
+    await sleep(6000);
+
+    const networkInfo = await ethers.getDefaultProvider().getNetwork();
+
+    for (const analysis of facetAnalyses) {
+      if (analysis.cuts.length === 0) continue;
+
+      console.log(`\n📝 Verifying ${analysis.name}...`);
+
+      try {
+        const facetPath = AVAILABLE_FACETS.find((f) => f.name === analysis.name)?.path;
+        await run("verify:verify", {
+          address: analysis.newFacetAddress,
+          network: networkInfo,
+          contract: facetPath,
+          constructorArguments: [],
+        });
+        console.log(`✅ ${analysis.name} verified`);
+      } catch (error: any) {
+        if (error.message.includes("Already Verified")) {
+          console.log(`✅ ${analysis.name} already verified`);
+        } else {
+          console.log(`⚠️ ${analysis.name} verification failed:`, error.message);
+        }
+      }
+    }
+
+    console.log("\n✅ Contract verification process completed!");
+    console.log("Note: Some contracts may already be verified or may take time to be indexed.");
+  }
 
   // 10. Final summary
   console.log("\n" + "=".repeat(60));
@@ -506,11 +625,19 @@ const main = async () => {
 
   console.log("=".repeat(60));
 
-  console.log("\n📝 Next steps:");
-  console.log("1. Update your frontend if any function signatures changed");
-  console.log("2. Test all upgraded facet functions thoroughly");
-  console.log("3. Update documentation with new facet addresses");
-  console.log("4. Monitor the system for any issues");
+  if (isSafeOwnerBool) {
+    console.log("\n📝 Next steps for Safe:");
+    console.log("1. Safe 멀티시그에서 위의 Diamond Cut 트랜잭션을 실행하세요");
+    console.log("2. 모든 Facet이 정상적으로 업그레이드되었는지 확인하세요");
+    console.log("3. 업그레이드된 기능들을 테스트하세요");
+    console.log("4. Block explorer에서 컨트랙트 검증 상태를 확인하세요");
+  } else {
+    console.log("\n📝 Next steps:");
+    console.log("1. Update your frontend if any function signatures changed");
+    console.log("2. Test all upgraded facet functions thoroughly");
+    console.log("3. Update documentation with new facet addresses");
+    console.log("4. Monitor the system for any issues");
+  }
 };
 
 if (require.main === module) {
