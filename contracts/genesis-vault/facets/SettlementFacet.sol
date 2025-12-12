@@ -497,10 +497,43 @@ contract SettlementFacet is IVaultErrors {
 
     // Apply exit cost - user receives net amount after fee deduction
     uint256 exitCostAmount = s.exitCost;
-    uint256 netAssets = grossAssets - exitCostAmount - performanceFeeAmount;
+    uint256 totalFees = exitCostAmount + performanceFeeAmount;
+    uint256 netAssets;
+
+    // Prevent underflow: ensure grossAssets is sufficient to cover fees
+    if (grossAssets < totalFees) {
+      // If fees exceed gross assets, user receives nothing (fees take priority)
+      // This can happen when sharePrice is very low and claimableShares is small
+      netAssets = 0;
+
+      // Still transfer fees to recipient (up to grossAssets)
+      // Prioritize exit cost over performance fee
+      if (grossAssets > 0) {
+        uint256 exitCostToTransfer = grossAssets < exitCostAmount ? grossAssets : exitCostAmount;
+        if (exitCostToTransfer > 0) {
+          LibGenesisVault.transferFeesToRecipient(exitCostToTransfer, "exit");
+        }
+
+        // Transfer remaining to performance fee if any
+        uint256 remainingForPerformanceFee = grossAssets - exitCostToTransfer;
+        if (remainingForPerformanceFee > 0 && performanceFeeAmount > 0) {
+          LibGenesisVault.transferFeesToRecipient(remainingForPerformanceFee, "performance");
+        }
+      }
+
+      // Update claimed amounts even though user receives nothing
+      roundData.claimedRedeemShares += claimableShares;
+      s.userEpochClaimedRedeemShares[user][epoch] += claimableShares;
+
+      // Emit withdrawal event with 0 assets
+      emit Withdraw(address(this), user, user, 0, claimableShares);
+      return;
+    }
+
+    netAssets = grossAssets - totalFees;
 
     // Check vault balance before any transfers
-    uint256 totalRequired = exitCostAmount + performanceFeeAmount + netAssets;
+    uint256 totalRequired = totalFees + netAssets;
     uint256 currentBalance = s.asset.balanceOf(address(this));
     require(
       currentBalance >= totalRequired,

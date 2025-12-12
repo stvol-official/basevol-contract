@@ -643,7 +643,12 @@ contract VaultCoreFacet {
     LibGenesisVault.transferFeesToRecipient(exitCostAmount, "exit");
 
     // Final amount = gross assets - exit cost - performance fees
-    uint256 finalAmount = grossAssetsNeeded - exitCostAmount - totalPerformanceFees;
+    // Prevent underflow: ensure grossAssetsNeeded is sufficient to cover fees
+    uint256 totalFees = exitCostAmount + totalPerformanceFees;
+    if (grossAssetsNeeded < totalFees) {
+      revert("VaultCoreFacet: Fees exceed gross assets");
+    }
+    uint256 finalAmount = grossAssetsNeeded - totalFees;
     require(finalAmount >= assets, "VaultCoreFacet: Insufficient after fees");
 
     // Check vault balance before transfer
@@ -743,7 +748,12 @@ contract VaultCoreFacet {
     LibGenesisVault.transferFeesToRecipient(exitCostAmount, "exit");
 
     // Final assets = total - exit cost - performance fees
-    assets = totalAssetsBeforeFees - exitCostAmount - totalPerformanceFees;
+    // Prevent underflow: ensure totalAssetsBeforeFees is sufficient to cover fees
+    uint256 totalFees = exitCostAmount + totalPerformanceFees;
+    if (totalAssetsBeforeFees < totalFees) {
+      revert("VaultCoreFacet: Fees exceed total assets");
+    }
+    assets = totalAssetsBeforeFees - totalFees;
 
     // Check vault balance before transfer
     uint256 currentBalance = s.asset.balanceOf(address(this));
