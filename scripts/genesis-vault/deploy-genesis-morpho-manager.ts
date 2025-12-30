@@ -1,11 +1,27 @@
 import { ethers, network, run, upgrades } from "hardhat";
 import config from "../../config";
+import * as readline from "readline";
 
 /*
  npx hardhat run --network base scripts/genesis-vault/deploy-genesis-morpho-manager.ts
 */
-const NETWORK = ["base_sepolia", "base"] as const;
+const NETWORK = ["base"] as const;
 type SupportedNetwork = (typeof NETWORK)[number];
+
+// Helper function to prompt for user input
+const prompt = (question: string): Promise<string> => {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+};
 
 const main = async () => {
   // Get network data from Hardhat config
@@ -25,13 +41,19 @@ const main = async () => {
   if (config.Address.Usdc[networkName] === ethers.ZeroAddress) {
     throw new Error("Missing USDC address in config");
   }
-  if (config.Address.Strategy[networkName] === ethers.ZeroAddress) {
-    throw new Error("Missing Strategy address in config");
-  }
   if (config.Address.MorphoVault[networkName] === ethers.ZeroAddress) {
     throw new Error(
       `Missing Morpho Vault address for ${networkName} network. Please update config.ts`,
     );
+  }
+
+  // Prompt for Strategy address
+  console.log("\n📝 Please enter the Strategy address:");
+  const strategyAddress = await prompt("Strategy address: ");
+
+  // Validate strategy address
+  if (!ethers.isAddress(strategyAddress)) {
+    throw new Error(`Invalid Strategy address: ${strategyAddress}`);
   }
 
   // Compile contracts
@@ -45,7 +67,7 @@ const main = async () => {
   console.log("Admin: %s", config.Address.Admin[networkName]);
   console.log("USDC: %s", config.Address.Usdc[networkName]);
   console.log("Morpho Vault: %s", config.Address.MorphoVault[networkName]);
-  console.log("Strategy: %s", config.Address.Strategy[networkName]);
+  console.log("Strategy: %s", strategyAddress);
   console.log("===========================================");
 
   try {
@@ -55,7 +77,7 @@ const main = async () => {
 
     const initParams = [
       config.Address.MorphoVault[networkName], // _morphoVault
-      config.Address.Strategy[networkName], // _strategy
+      strategyAddress, // _strategy
     ];
 
     console.log("Initialization parameters:");
@@ -95,7 +117,7 @@ const main = async () => {
     console.log("Owner:", deployer.address);
     console.log("Asset (USDC):", config.Address.Usdc[networkName]);
     console.log("Morpho Vault:", config.Address.MorphoVault[networkName]);
-    console.log("Strategy:", config.Address.Strategy[networkName]);
+    console.log("Strategy:", strategyAddress);
     console.log("===========================================");
 
     // Check configuration
@@ -117,10 +139,7 @@ const main = async () => {
 
     // Call setMorphoVaultManager on GenesisStrategy
     console.log("\n🔧 Setting MorphoVaultManager on GenesisStrategy...");
-    const genesisStrategy = await ethers.getContractAt(
-      "GenesisStrategy",
-      config.Address.Strategy[networkName],
-    );
+    const genesisStrategy = await ethers.getContractAt("GenesisStrategy", strategyAddress);
 
     const setMorphoVaultManagerTx =
       await genesisStrategy.setMorphoVaultManager(morphoVaultManagerAddress);
