@@ -1,6 +1,6 @@
 node_modules
 typechain
-.secret
+.secret*
 .env
 coverage.json
 coverage

@@ -410,7 +410,8 @@ const main = async () => {
 
     console.log("\n🔍 Verifying deployed facets on block explorer...");
 
-    const networkInfo = await ethers.getDefaultProvider().getNetwork();
+    // Use Hardhat's configured provider (uses ALCHEMY_API_KEY from .env) instead of default free tier
+    const networkInfo = await ethers.provider.getNetwork();
 
     for (const analysis of facetAnalyses) {
       if (analysis.cuts.length === 0) continue;
@@ -573,7 +574,8 @@ const main = async () => {
     console.log("⏳ Waiting for block explorer indexing (6 seconds)...");
     await sleep(6000);
 
-    const networkInfo = await ethers.getDefaultProvider().getNetwork();
+    // Use Hardhat's configured provider (uses ALCHEMY_API_KEY from .env) instead of default free tier
+    const networkInfo = await ethers.provider.getNetwork();
 
     for (const analysis of facetAnalyses) {
       if (analysis.cuts.length === 0) continue;
