@@ -128,7 +128,7 @@ const upgrade = async () => {
     }
 
     // Contract verification
-    const network = await ethers.getDefaultProvider().getNetwork();
+    const network = await ethers.provider.getNetwork();
 
     await sleep(6000);
 

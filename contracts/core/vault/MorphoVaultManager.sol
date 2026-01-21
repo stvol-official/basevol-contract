@@ -10,19 +10,30 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IMetaMorphoV1_1 } from "../../interfaces/IMetaMorphoV1_1.sol";
 import { IGenesisStrategy } from "./interfaces/IGenesisStrategy.sol";
+import { IMorphoVaultManager } from "./interfaces/IMorphoVaultManager.sol";
 import { MorphoVaultManagerStorage } from "./storage/MorphoVaultManagerStorage.sol";
+import { LibMorphoMultiVault } from "./libraries/LibMorphoMultiVault.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
-import { Strings } from "@openzeppelin/contracts/utils/Strings.sol";
 
+/// @title MorphoVaultManager
+/// @author BaseVol Team
+/// @notice Manages deposits/withdrawals to Morpho Vaults with multi-vault support
+/// @dev Supports both single-vault mode (backward compatible) and multi-vault mode
 contract MorphoVaultManager is
   Initializable,
   UUPSUpgradeable,
   PausableUpgradeable,
   OwnableUpgradeable,
-  ReentrancyGuardUpgradeable
+  ReentrancyGuardUpgradeable,
+  IMorphoVaultManager
 {
   using SafeERC20 for IERC20;
-  using Strings for uint256;
+  using MorphoVaultManagerStorage for MorphoVaultManagerStorage.Layout;
+  using LibMorphoMultiVault for MorphoVaultManagerStorage.Layout;
+
+  /*//////////////////////////////////////////////////////////////
+                          LEGACY EVENTS
+  //////////////////////////////////////////////////////////////*/
 
   event DepositedToMorpho(
     address indexed strategy,
@@ -30,46 +41,63 @@ contract MorphoVaultManager is
     uint256 shares,
     uint256 morphoBalance
   );
-
   event WithdrawnFromMorpho(
     address indexed strategy,
     uint256 amount,
     uint256 shares,
     uint256 morphoBalance
   );
-
   event RedeemedFromMorpho(
     address indexed strategy,
     uint256 shares,
     uint256 assets,
     uint256 morphoBalance
   );
-
   event ConfigUpdated(uint256 maxStrategyDeposit, uint256 minStrategyDeposit);
-  event DebugLog(string message);
-  
-  // Security: JIT Approval events
   event MorphoApprovalGranted(uint256 amount, uint256 timestamp);
   event MorphoApprovalRevoked(uint256 timestamp);
   event EmergencyMorphoApprovalRevoked(address indexed caller, uint256 timestamp);
+
+  /*//////////////////////////////////////////////////////////////
+                          LEGACY ERRORS
+  //////////////////////////////////////////////////////////////*/
 
   error InsufficientBalance();
   error InvalidAmount();
   error ExceedsMaxDeposit();
   error BelowMinDeposit();
   error CallerNotAuthorized(address authorized, address caller);
+  error DepositFailed();
+  error WithdrawFailed();
+  error RedeemFailed();
+  error InvalidAddress();
+
+  /*//////////////////////////////////////////////////////////////
+                            MODIFIERS
+  //////////////////////////////////////////////////////////////*/
 
   modifier authCaller(address authorized) {
-    if (_msgSender() != authorized) {
-      revert CallerNotAuthorized(authorized, _msgSender());
-    }
+    if (_msgSender() != authorized) revert CallerNotAuthorized(authorized, _msgSender());
     _;
   }
+
+  modifier onlyMultiVault() {
+    if (!MorphoVaultManagerStorage.layout().isMultiVaultEnabled) revert MultiVaultNotEnabled();
+    _;
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                          CONSTRUCTOR
+  //////////////////////////////////////////////////////////////*/
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
     _disableInitializers();
   }
+
+  /*//////////////////////////////////////////////////////////////
+                          INITIALIZERS
+  //////////////////////////////////////////////////////////////*/
 
   function initialize(address _morphoVault, address _strategy) external initializer {
     __UUPSUpgradeable_init();
@@ -77,73 +105,51 @@ contract MorphoVaultManager is
     __Pausable_init();
     __ReentrancyGuard_init();
 
-    address _asset = IGenesisStrategy(_strategy).asset();
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
 
-    require(_morphoVault != address(0), "Invalid Morpho Vault address");
-    require(_strategy != address(0), "Invalid Strategy address");
+    if (_morphoVault == address(0) || _strategy == address(0)) revert InvalidAddress();
 
-    $.asset = IERC20(_asset);
+    $.asset = IERC20(IGenesisStrategy(_strategy).asset());
     $.morphoVault = IMetaMorphoV1_1(_morphoVault);
     $.strategy = _strategy;
-
-    // Set default configuration
-    $.maxStrategyDeposit = 10000000e6; // 10M USDC
-    $.minStrategyDeposit = 100e6; // 100 USDC
-
-    // Security Fix: Remove infinite approval
-    // JIT (Just-In-Time) approval will be used in depositToMorpho()
-    // $.asset.approve(_morphoVault, type(uint256).max); // REMOVED - Security vulnerability
+    $.maxStrategyDeposit = 10000000e6;
+    $.minStrategyDeposit = 100e6;
   }
 
-  /// @notice Deposits assets from Strategy to Morpho Vault
-  /// @dev Strategy must transfer assets to this contract before calling this function
-  /// @dev Security: Uses JIT (Just-In-Time) approval - approves exact amount, revokes after
-  /// @param amount The amount of assets to deposit
+  /// @notice Initializes V2 features (multi-vault support)
+  function initializeV2() external reinitializer(2) {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+    $.isMultiVaultEnabled = false;
+    $.primaryVaultWeightBps = 0;
+    $.rebalanceThresholdBps = 500;
+    $.lastRebalanceTimestamp = 0;
+    $.primaryVaultDeposited = $.totalDeposited;
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                      CORE DEPOSIT/WITHDRAW
+  //////////////////////////////////////////////////////////////*/
+
+  /// @inheritdoc IMorphoVaultManager
   function depositToMorpho(
     uint256 amount
   ) external authCaller(strategy()) nonReentrant whenNotPaused {
     if (amount == 0) revert InvalidAmount();
-    if (amount < MorphoVaultManagerStorage.layout().minStrategyDeposit) revert BelowMinDeposit();
-    if (amount > MorphoVaultManagerStorage.layout().maxStrategyDeposit) revert ExceedsMaxDeposit();
 
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
 
-    // Verify that we have received the assets from strategy
-    uint256 balance = $.asset.balanceOf(address(this));
-    if (balance < amount) revert InsufficientBalance();
+    if (amount < $.minStrategyDeposit) revert BelowMinDeposit();
+    if (amount > $.maxStrategyDeposit) revert ExceedsMaxDeposit();
+    if ($.asset.balanceOf(address(this)) < amount) revert InsufficientBalance();
 
-    // Security Fix: JIT Approval - approve exact amount needed
-    $.asset.approve(address($.morphoVault), amount);
-    emit MorphoApprovalGranted(amount, block.timestamp);
-
-    try $.morphoVault.deposit(amount, address(this)) returns (uint256 shares) {
-      // Security Fix: Revoke approval immediately after success
-      $.asset.approve(address($.morphoVault), 0);
-      emit MorphoApprovalRevoked(block.timestamp);
-
-      // Update global state
-      $.totalDeposited += amount;
-      $.totalUtilized += amount;
-      $.morphoShares += shares;
-
-      emit DepositedToMorpho($.strategy, amount, shares, $.morphoVault.balanceOf(address(this)));
-
-      // Call strategy callback on success
-      IGenesisStrategy($.strategy).morphoDepositCompletedCallback(amount, true);
-    } catch {
-      // Security Fix: Revoke approval even on failure
-      $.asset.approve(address($.morphoVault), 0);
-      emit MorphoApprovalRevoked(block.timestamp);
-
-      // Failure - call strategy callback on failure
-      IGenesisStrategy($.strategy).morphoDepositCompletedCallback(amount, false);
-      revert("Deposit to Morpho failed");
+    if (!$.isMultiVaultEnabled) {
+      _depositToPrimaryVaultSingle($, amount);
+    } else {
+      _depositToAllVaults($, amount);
     }
   }
 
-  /// @notice Withdraws assets from Morpho Vault back to Strategy
-  /// @param amount The amount of assets to withdraw
+  /// @inheritdoc IMorphoVaultManager
   function withdrawFromMorpho(
     uint256 amount
   ) external authCaller(strategy()) nonReentrant whenNotPaused {
@@ -151,176 +157,342 @@ contract MorphoVaultManager is
 
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
 
-    uint256 availableAssets = $.morphoVault.maxWithdraw(address(this));
-    if (availableAssets < amount) revert InsufficientBalance();
-
-    try $.morphoVault.withdraw(amount, address(this), address(this)) returns (uint256 shares) {
-      // Safe decrease to prevent underflow
-      if ($.totalUtilized >= amount) {
-        $.totalUtilized -= amount;
-      } else {
-        $.totalUtilized = 0;
-      }
-      $.totalWithdrawn += amount;
-      $.morphoShares -= shares;
-
-      emit WithdrawnFromMorpho(
-        address($.strategy),
-        amount,
-        shares,
-        $.morphoVault.balanceOf(address(this))
-      );
-
-      // Check actual balance before transfer
-      uint256 actualBalance = $.asset.balanceOf(address(this));
-      uint256 transferAmount = amount > actualBalance ? actualBalance : amount;
-
-      if (transferAmount < amount) {
-        emit DebugLog(
-          string(
-            abi.encodePacked(
-              "Warning: MorphoVaultManager balance insufficient. Expected: ",
-              amount.toString(),
-              ", Available: ",
-              actualBalance.toString()
-            )
-          )
-        );
-      }
-
-      // Transfer available amount to strategy
-      if (transferAmount > 0) {
-        $.asset.safeTransfer(strategy(), transferAmount);
-      }
-
-      // Call strategy callback with actual transferred amount
-      IGenesisStrategy($.strategy).morphoWithdrawCompletedCallback(transferAmount, true);
-    } catch {
-      // Failure - call strategy callback on failure
-      IGenesisStrategy($.strategy).morphoWithdrawCompletedCallback(amount, false);
-      revert("Withdraw from Morpho failed");
+    if (!$.isMultiVaultEnabled) {
+      _withdrawFromPrimaryVaultSingle($, amount);
+    } else {
+      uint256 withdrawn = $.withdrawFromAllVaults(amount);
+      _updateWithdrawState($, withdrawn);
+      $.asset.safeTransfer($.strategy, withdrawn);
+      IGenesisStrategy($.strategy).morphoWithdrawCompletedCallback(withdrawn, true);
     }
   }
 
-  /// @notice Redeems shares from Morpho Vault
-  /// @param shares The amount of shares to redeem
+  /// @inheritdoc IMorphoVaultManager
   function redeemFromMorpho(
     uint256 shares
   ) external authCaller(strategy()) nonReentrant whenNotPaused {
     if (shares == 0) revert InvalidAmount();
 
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+    if ($.morphoVault.balanceOf(address(this)) < shares) revert InsufficientBalance();
 
-    uint256 availableShares = $.morphoVault.balanceOf(address(this));
-    if (availableShares < shares) revert InsufficientBalance();
+    uint256 assets = $.morphoVault.redeem(shares, address(this), address(this));
+    _updateRedeemState($, assets, shares);
 
-    try $.morphoVault.redeem(shares, address(this), address(this)) returns (uint256 assets) {
-      // Safe decrease to prevent underflow
-      if ($.totalUtilized >= assets) {
-        $.totalUtilized -= assets;
+    emit RedeemedFromMorpho($.strategy, shares, assets, $.morphoVault.balanceOf(address(this)));
+
+    uint256 transferAmount = Math.min(assets, $.asset.balanceOf(address(this)));
+    if (transferAmount > 0) $.asset.safeTransfer($.strategy, transferAmount);
+
+    IGenesisStrategy($.strategy).morphoRedeemCompletedCallback(shares, assets, true);
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                    MULTI-VAULT ADMIN FUNCTIONS
+  //////////////////////////////////////////////////////////////*/
+
+  /// @inheritdoc IMorphoVaultManager
+  function enableMultiVault(uint256 primaryWeightBps) external onlyOwner {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+
+    if ($.isMultiVaultEnabled) revert MultiVaultAlreadyEnabled();
+    if (primaryWeightBps == 0) revert InvalidWeight(primaryWeightBps);
+
+    $.isMultiVaultEnabled = true;
+    $.primaryVaultWeightBps = primaryWeightBps;
+    $.primaryVaultDeposited = $.totalDeposited;
+    $.lastRebalanceTimestamp = block.timestamp;
+
+    emit MultiVaultEnabled(primaryWeightBps, block.timestamp);
+  }
+
+  /// @inheritdoc IMorphoVaultManager
+  function disableMultiVault() external onlyOwner onlyMultiVault {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+
+    for (uint256 i = 0; i < $.additionalVaults.length; i++) {
+      if ($.additionalVaults[i].shares > 0) revert InsufficientBalance();
+    }
+
+    $.isMultiVaultEnabled = false;
+    $.primaryVaultWeightBps = 0;
+
+    emit MultiVaultDisabled(block.timestamp);
+  }
+
+  /// @inheritdoc IMorphoVaultManager
+  function addVault(address vault, uint256 weightBps) external onlyOwner onlyMultiVault {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+
+    if (vault == address(0)) revert InvalidAmount();
+    if (weightBps == 0) revert InvalidWeight(weightBps);
+    if ($.additionalVaults.length >= MorphoVaultManagerStorage.MAX_ADDITIONAL_VAULTS)
+      revert MaxVaultsReached(MorphoVaultManagerStorage.MAX_ADDITIONAL_VAULTS + 1);
+
+    if (vault == address($.morphoVault)) revert VaultAlreadyExists(vault);
+    for (uint256 i = 0; i < $.additionalVaults.length; i++) {
+      if ($.additionalVaults[i].vault == vault) revert VaultAlreadyExists(vault);
+    }
+
+    address vaultAsset = IMetaMorphoV1_1(vault).asset();
+    if (vaultAsset != address($.asset)) revert AssetMismatch(address($.asset), vaultAsset);
+
+    $.additionalVaults.push(
+      MorphoVaultManagerStorage.VaultAllocation({
+        vault: vault,
+        weightBps: weightBps,
+        shares: 0,
+        deposited: 0,
+        withdrawn: 0,
+        isActive: true
+      })
+    );
+
+    emit VaultAdded($.additionalVaults.length, vault, weightBps, block.timestamp);
+  }
+
+  /// @inheritdoc IMorphoVaultManager
+  function deactivateVault(uint256 vaultIndex) external onlyOwner onlyMultiVault {
+    if (vaultIndex == 0) revert CannotDeactivatePrimaryVault();
+
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+    uint256 idx = vaultIndex - 1;
+
+    if (idx >= $.additionalVaults.length) revert VaultNotFound(vaultIndex);
+    if (!$.additionalVaults[idx].isActive) revert VaultAlreadyInactive(vaultIndex);
+
+    $.additionalVaults[idx].isActive = false;
+
+    emit VaultDeactivated(vaultIndex, $.additionalVaults[idx].vault, block.timestamp);
+  }
+
+  /// @inheritdoc IMorphoVaultManager
+  function reactivateVault(uint256 vaultIndex) external onlyOwner onlyMultiVault {
+    if (vaultIndex == 0) revert InvalidAmount();
+
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+    uint256 idx = vaultIndex - 1;
+
+    if (idx >= $.additionalVaults.length) revert VaultNotFound(vaultIndex);
+    if ($.additionalVaults[idx].isActive) revert VaultAlreadyActive(vaultIndex);
+
+    $.additionalVaults[idx].isActive = true;
+
+    emit VaultReactivated(vaultIndex, $.additionalVaults[idx].vault, block.timestamp);
+  }
+
+  /// @inheritdoc IMorphoVaultManager
+  function updateVaultWeight(uint256 vaultIndex, uint256 newWeightBps) external onlyOwner {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+
+    if (!$.isMultiVaultEnabled) revert MultiVaultNotEnabled();
+    if (newWeightBps == 0) revert InvalidWeight(newWeightBps);
+
+    uint256 oldWeight;
+    address vaultAddress;
+
+    if (vaultIndex == 0) {
+      oldWeight = $.primaryVaultWeightBps;
+      vaultAddress = address($.morphoVault);
+      $.primaryVaultWeightBps = newWeightBps;
+    } else {
+      uint256 idx = vaultIndex - 1;
+      if (idx >= $.additionalVaults.length) revert VaultNotFound(vaultIndex);
+
+      oldWeight = $.additionalVaults[idx].weightBps;
+      vaultAddress = $.additionalVaults[idx].vault;
+      $.additionalVaults[idx].weightBps = newWeightBps;
+    }
+
+    emit VaultWeightUpdated(vaultIndex, vaultAddress, oldWeight, newWeightBps, block.timestamp);
+  }
+
+  /// @inheritdoc IMorphoVaultManager
+  function batchUpdateVaultWeights(
+    uint256[] calldata vaultIndices,
+    uint256[] calldata newWeightsBps
+  ) external onlyOwner onlyMultiVault {
+    if (vaultIndices.length != newWeightsBps.length) revert InvalidAmount();
+
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+
+    for (uint256 i = 0; i < vaultIndices.length; i++) {
+      uint256 vaultIndex = vaultIndices[i];
+      uint256 newWeightBps = newWeightsBps[i];
+
+      if (newWeightBps == 0) revert InvalidWeight(newWeightBps);
+
+      uint256 oldWeight;
+      address vaultAddress;
+
+      if (vaultIndex == 0) {
+        oldWeight = $.primaryVaultWeightBps;
+        vaultAddress = address($.morphoVault);
+        $.primaryVaultWeightBps = newWeightBps;
       } else {
-        $.totalUtilized = 0;
-      }
-      $.totalWithdrawn += assets;
-      $.morphoShares -= shares;
+        uint256 idx = vaultIndex - 1;
+        if (idx >= $.additionalVaults.length) revert VaultNotFound(vaultIndex);
 
-      emit RedeemedFromMorpho(
-        address($.strategy),
-        shares,
-        assets,
-        $.morphoVault.balanceOf(address(this))
-      );
-
-      // Check actual balance before transfer
-      uint256 actualBalance = $.asset.balanceOf(address(this));
-      uint256 transferAmount = assets > actualBalance ? actualBalance : assets;
-
-      if (transferAmount < assets) {
-        emit DebugLog(
-          string(
-            abi.encodePacked(
-              "Warning: MorphoVaultManager balance insufficient for redeem. Expected: ",
-              assets.toString(),
-              ", Available: ",
-              actualBalance.toString()
-            )
-          )
-        );
+        oldWeight = $.additionalVaults[idx].weightBps;
+        vaultAddress = $.additionalVaults[idx].vault;
+        $.additionalVaults[idx].weightBps = newWeightBps;
       }
 
-      // Transfer available amount to strategy
-      if (transferAmount > 0) {
-        $.asset.safeTransfer(strategy(), transferAmount);
-      }
-
-      // Call strategy callback with actual transferred amount
-      IGenesisStrategy($.strategy).morphoRedeemCompletedCallback(shares, transferAmount, true);
-    } catch {
-      // Failure - call strategy callback on failure
-      IGenesisStrategy($.strategy).morphoRedeemCompletedCallback(shares, 0, false);
-      revert("Redeem from Morpho failed");
+      emit VaultWeightUpdated(vaultIndex, vaultAddress, oldWeight, newWeightBps, block.timestamp);
     }
   }
 
-  /// @notice Emergency withdrawal for a strategy (owner only)
-  /// @param amount The amount to withdraw
+  /// @inheritdoc IMorphoVaultManager
+  function setRebalanceThreshold(uint256 thresholdBps) external onlyOwner {
+    if (thresholdBps < MorphoVaultManagerStorage.MIN_REBALANCE_THRESHOLD_BPS)
+      revert InvalidRebalanceThreshold(thresholdBps);
+
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+    uint256 oldThreshold = $.rebalanceThresholdBps;
+    $.rebalanceThresholdBps = thresholdBps;
+
+    emit RebalanceThresholdUpdated(oldThreshold, thresholdBps);
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                      REBALANCING FUNCTIONS
+  //////////////////////////////////////////////////////////////*/
+
+  /// @inheritdoc IMorphoVaultManager
+  function rebalance() external onlyOwner onlyMultiVault nonReentrant whenNotPaused {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+
+    uint256 totalAssets = $.getTotalMorphoAssets();
+    uint256 totalWeight = $.getTotalWeightBps();
+    if (totalAssets == 0 || totalWeight == 0) revert NothingToRebalance();
+
+    uint256 totalMoved = 0;
+    uint256 vaultsAffected = 0;
+
+    uint256 vaultCount = 1 + $.additionalVaults.length;
+    uint256[] memory currentAmounts = new uint256[](vaultCount);
+    uint256[] memory targetAmounts = new uint256[](vaultCount);
+
+    currentAmounts[0] = $.morphoVault.convertToAssets($.morphoShares);
+    targetAmounts[0] = (totalAssets * $.primaryVaultWeightBps) / totalWeight;
+
+    for (uint256 i = 0; i < $.additionalVaults.length; i++) {
+      if (!$.additionalVaults[i].isActive) continue;
+      currentAmounts[i + 1] = IMetaMorphoV1_1($.additionalVaults[i].vault).convertToAssets(
+        $.additionalVaults[i].shares
+      );
+      targetAmounts[i + 1] = (totalAssets * $.additionalVaults[i].weightBps) / totalWeight;
+    }
+
+    // Withdraw from over-allocated
+    for (uint256 i = 0; i < vaultCount; i++) {
+      if (currentAmounts[i] > targetAmounts[i]) {
+        uint256 excess = currentAmounts[i] - targetAmounts[i];
+        if (i == 0) {
+          $.withdrawFromPrimaryVault(excess);
+        } else {
+          $.withdrawFromAdditionalVault(i - 1, excess);
+        }
+        totalMoved += excess;
+        vaultsAffected++;
+      }
+    }
+
+    // Deposit to under-allocated
+    uint256 availableBalance = $.asset.balanceOf(address(this));
+    for (uint256 i = 0; i < vaultCount; i++) {
+      if (currentAmounts[i] < targetAmounts[i]) {
+        uint256 deficit = Math.min(targetAmounts[i] - currentAmounts[i], availableBalance);
+        if (deficit > 0) {
+          if (i == 0) {
+            $.depositToPrimaryVault(deficit);
+          } else {
+            $.depositToAdditionalVault(i - 1, deficit);
+          }
+          availableBalance -= deficit;
+          vaultsAffected++;
+        }
+      }
+    }
+
+    $.lastRebalanceTimestamp = block.timestamp;
+
+    emit Rebalanced(totalMoved, vaultsAffected, block.timestamp);
+  }
+
+  /// @inheritdoc IMorphoVaultManager
+  function withdrawAllFromVault(
+    uint256 vaultIndex
+  ) external onlyOwner onlyMultiVault nonReentrant whenNotPaused {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+
+    if (vaultIndex == 0) {
+      uint256 assets = $.morphoVault.convertToAssets($.morphoShares);
+      if (assets > 0) $.withdrawFromPrimaryVault(assets);
+    } else {
+      uint256 idx = vaultIndex - 1;
+      if (idx >= $.additionalVaults.length) revert VaultNotFound(vaultIndex);
+
+      if ($.additionalVaults[idx].shares > 0) {
+        uint256 assets = IMetaMorphoV1_1($.additionalVaults[idx].vault).convertToAssets(
+          $.additionalVaults[idx].shares
+        );
+        $.withdrawFromAdditionalVault(idx, assets);
+      }
+    }
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                      EMERGENCY FUNCTIONS
+  //////////////////////////////////////////////////////////////*/
+
   function emergencyWithdraw(uint256 amount) external onlyOwner nonReentrant {
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
 
-    // Withdraw from Morpho Vault
-    try $.morphoVault.withdraw(amount, owner(), address(this)) returns (uint256 shares) {
-      // Safe decrease to prevent underflow
-      if ($.totalUtilized >= amount) {
-        $.totalUtilized -= amount;
-      } else {
-        $.totalUtilized = 0;
-      }
-      $.totalWithdrawn += amount;
-      $.morphoShares -= shares;
-
-      emit WithdrawnFromMorpho(strategy(), amount, shares, $.morphoVault.balanceOf(address(this)));
-    } catch {
-      revert("Emergency withdraw from Morpho failed");
-    }
+    uint256 shares = $.morphoVault.withdraw(amount, owner(), address(this));
+    _updateWithdrawStateWithShares($, amount, shares);
+    emit WithdrawnFromMorpho($.strategy, amount, shares, $.morphoVault.balanceOf(address(this)));
   }
 
-  function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
-
-  /*//////////////////////////////////////////////////////////////
-                            ADMIN FUNCTIONS
-    //////////////////////////////////////////////////////////////*/
-
-  /// @notice Sets configuration parameters
-  function setConfig(uint256 _maxStrategyDeposit, uint256 _minStrategyDeposit) external onlyOwner {
+  function emergencyRevokeMorphoApproval() external onlyOwner {
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
 
+    $.asset.approve(address($.morphoVault), 0);
+    for (uint256 i = 0; i < $.additionalVaults.length; i++) {
+      $.asset.approve($.additionalVaults[i].vault, 0);
+    }
+
+    emit EmergencyMorphoApprovalRevoked(msg.sender, block.timestamp);
+  }
+
+  function _authorizeUpgrade(address) internal override onlyOwner {}
+
+  /*//////////////////////////////////////////////////////////////
+                        ADMIN FUNCTIONS
+  //////////////////////////////////////////////////////////////*/
+
+  function setConfig(uint256 _maxStrategyDeposit, uint256 _minStrategyDeposit) external onlyOwner {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
     $.maxStrategyDeposit = _maxStrategyDeposit;
     $.minStrategyDeposit = _minStrategyDeposit;
-
     emit ConfigUpdated(_maxStrategyDeposit, _minStrategyDeposit);
   }
 
-  /// @notice Pauses the contract
   function pause() external onlyOwner {
     _pause();
   }
-
-  /// @notice Unpauses the contract
   function unpause() external onlyOwner {
     _unpause();
   }
 
   /*//////////////////////////////////////////////////////////////
-                            VIEW FUNCTIONS
-    //////////////////////////////////////////////////////////////*/
+                          VIEW FUNCTIONS
+  //////////////////////////////////////////////////////////////*/
 
-  /// @notice Gets the Morpho Vault balance in assets
   function morphoAssetBalance() public view returns (uint256) {
-    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
-    return $.morphoVault.convertToAssets($.morphoVault.balanceOf(address(this)));
+    return MorphoVaultManagerStorage.layout().getTotalMorphoAssets();
   }
 
-  /// @notice Gets the Morpho Vault balance in shares
   function morphoShareBalance() public view returns (uint256) {
     return MorphoVaultManagerStorage.layout().morphoVault.balanceOf(address(this));
   }
@@ -328,24 +500,23 @@ contract MorphoVaultManager is
   function totalDeposited() public view returns (uint256) {
     return MorphoVaultManagerStorage.layout().totalDeposited;
   }
-
   function totalWithdrawn() public view returns (uint256) {
     return MorphoVaultManagerStorage.layout().totalWithdrawn;
   }
-
   function totalUtilized() public view returns (uint256) {
     return MorphoVaultManagerStorage.layout().totalUtilized;
   }
 
-  /// @notice Gets the current yield/profit from Morpho
-  function currentYield() public view returns (uint256) {
-    uint256 currentValue = morphoAssetBalance();
+  function currentYield() public view returns (uint256 yield) {
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
-    uint256 invested = $.totalDeposited - $.totalWithdrawn;
-    return currentValue > invested ? currentValue - invested : 0;
+    uint256 currentValue = $.getTotalMorphoAssets();
+    uint256 invested = $.totalDeposited > $.totalWithdrawn
+      ? $.totalDeposited - $.totalWithdrawn
+      : 0;
+    if (currentValue > invested) yield = currentValue - invested;
   }
 
-  function config() public view returns (uint256 maxStrategyDeposit, uint256 minStrategyDeposit) {
+  function config() public view returns (uint256, uint256) {
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
     return ($.maxStrategyDeposit, $.minStrategyDeposit);
   }
@@ -353,46 +524,145 @@ contract MorphoVaultManager is
   function strategy() public view returns (address) {
     return MorphoVaultManagerStorage.layout().strategy;
   }
-
   function morphoVault() public view returns (address) {
     return address(MorphoVaultManagerStorage.layout().morphoVault);
   }
-
-  /*//////////////////////////////////////////////////////////////
-                      SECURITY: APPROVAL MANAGEMENT
-    //////////////////////////////////////////////////////////////*/
-
-  /// @notice Emergency function to revoke Morpho approval
-  /// @dev Only callable by owner in emergency situations
-  function emergencyRevokeMorphoApproval() external onlyOwner {
-    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
-    $.asset.approve(address($.morphoVault), 0);
-    emit EmergencyMorphoApprovalRevoked(msg.sender, block.timestamp);
+  function isMultiVaultEnabled() external view returns (bool) {
+    return MorphoVaultManagerStorage.layout().isMultiVaultEnabled;
+  }
+  function getVaultCount() external view returns (uint256) {
+    return 1 + MorphoVaultManagerStorage.layout().additionalVaults.length;
   }
 
-  /// @notice Gets current Morpho approval amount
-  /// @return Current approval amount (should always be 0 in JIT mode)
+  function getActiveVaultCount() external view returns (uint256 count) {
+    MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
+    count = 1;
+    if ($.isMultiVaultEnabled) {
+      for (uint256 i = 0; i < $.additionalVaults.length; i++) {
+        if ($.additionalVaults[i].isActive) count++;
+      }
+    }
+  }
+
+  function getVaultInfo(uint256 vaultIndex) external view returns (VaultInfo memory) {
+    return MorphoVaultManagerStorage.layout().getVaultInfo(vaultIndex);
+  }
+
+  function getAllVaultInfos() external view returns (VaultInfo[] memory) {
+    return LibMorphoMultiVault.getAllVaultInfos(MorphoVaultManagerStorage.layout());
+  }
+
+  function getAllocationStatus() external view returns (AllocationStatus[] memory) {
+    return MorphoVaultManagerStorage.layout().getAllocationStatus();
+  }
+
+  function isRebalanceNeeded() external view returns (bool needed, uint256 maxDeviationBps) {
+    return MorphoVaultManagerStorage.layout().isRebalanceNeeded();
+  }
+
+  function getTotalWeightBps() external view returns (uint256) {
+    return MorphoVaultManagerStorage.layout().getTotalWeightBps();
+  }
+
+  function getRebalanceThreshold() external view returns (uint256) {
+    return MorphoVaultManagerStorage.layout().rebalanceThresholdBps;
+  }
+
+  function getLastRebalanceTimestamp() external view returns (uint256) {
+    return MorphoVaultManagerStorage.layout().lastRebalanceTimestamp;
+  }
+
   function getMorphoAllowance() external view returns (uint256) {
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
     return $.asset.allowance(address(this), address($.morphoVault));
   }
 
-  /// @notice Checks if Morpho approval is healthy (should be 0)
-  /// @return isHealthy Whether approval is 0 (healthy state)
-  /// @return currentAllowance Current approval amount
-  /// @return status Human-readable status message
-  function checkMorphoApprovalHealth() external view returns (
-    bool isHealthy,
-    uint256 currentAllowance,
-    string memory status
-  ) {
+  function checkMorphoApprovalHealth()
+    external
+    view
+    returns (bool isHealthy, uint256 currentAllowance)
+  {
     MorphoVaultManagerStorage.Layout storage $ = MorphoVaultManagerStorage.layout();
     currentAllowance = $.asset.allowance(address(this), address($.morphoVault));
-    
-    // In JIT mode, approval should always be 0
     isHealthy = (currentAllowance == 0);
-    status = isHealthy ? "HEALTHY" : "WARNING: Non-zero approval detected";
-    
-    return (isHealthy, currentAllowance, status);
+  }
+
+  /*//////////////////////////////////////////////////////////////
+                      INTERNAL FUNCTIONS
+  //////////////////////////////////////////////////////////////*/
+
+  function _depositToPrimaryVaultSingle(
+    MorphoVaultManagerStorage.Layout storage $,
+    uint256 amount
+  ) internal {
+    $.asset.approve(address($.morphoVault), amount);
+    emit MorphoApprovalGranted(amount, block.timestamp);
+
+    uint256 shares = $.morphoVault.deposit(amount, address(this));
+    $.asset.approve(address($.morphoVault), 0);
+    emit MorphoApprovalRevoked(block.timestamp);
+
+    $.totalDeposited += amount;
+    $.totalUtilized += amount;
+    $.morphoShares += shares;
+
+    emit DepositedToMorpho($.strategy, amount, shares, $.morphoVault.balanceOf(address(this)));
+    IGenesisStrategy($.strategy).morphoDepositCompletedCallback(amount, true);
+  }
+
+  function _depositToAllVaults(
+    MorphoVaultManagerStorage.Layout storage $,
+    uint256 amount
+  ) internal {
+    LibMorphoMultiVault.depositToAllVaults($, amount);
+    $.totalDeposited += amount;
+    $.totalUtilized += amount;
+    IGenesisStrategy($.strategy).morphoDepositCompletedCallback(amount, true);
+  }
+
+  function _withdrawFromPrimaryVaultSingle(
+    MorphoVaultManagerStorage.Layout storage $,
+    uint256 amount
+  ) internal {
+    if ($.morphoVault.maxWithdraw(address(this)) < amount) revert InsufficientBalance();
+
+    uint256 shares = $.morphoVault.withdraw(amount, address(this), address(this));
+    _updateWithdrawStateWithShares($, amount, shares);
+
+    emit WithdrawnFromMorpho($.strategy, amount, shares, $.morphoVault.balanceOf(address(this)));
+
+    uint256 transferAmount = Math.min(amount, $.asset.balanceOf(address(this)));
+    if (transferAmount > 0) $.asset.safeTransfer($.strategy, transferAmount);
+
+    IGenesisStrategy($.strategy).morphoWithdrawCompletedCallback(transferAmount, true);
+  }
+
+  function _updateWithdrawState(
+    MorphoVaultManagerStorage.Layout storage $,
+    uint256 amount
+  ) internal {
+    if ($.totalUtilized >= amount) {
+      $.totalUtilized -= amount;
+    } else {
+      $.totalUtilized = 0;
+    }
+    $.totalWithdrawn += amount;
+  }
+
+  function _updateWithdrawStateWithShares(
+    MorphoVaultManagerStorage.Layout storage $,
+    uint256 amount,
+    uint256 shares
+  ) internal {
+    _updateWithdrawState($, amount);
+    $.morphoShares -= shares;
+  }
+
+  function _updateRedeemState(
+    MorphoVaultManagerStorage.Layout storage $,
+    uint256 assets,
+    uint256 shares
+  ) internal {
+    _updateWithdrawStateWithShares($, assets, shares);
   }
 }
