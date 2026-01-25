@@ -48,6 +48,19 @@ error VaultNotEmpty(address vault, uint256 assets);
 /// @notice Invalid vault address (zero address)
 error InvalidVaultAddress();
 
+/// @notice Invalid vault parameter
+/// @param vault The invalid vault address
+error InvalidVault(address vault);
+
+/// @notice Vault is already active
+/// @param vault The vault address
+error VaultAlreadyActive(address vault);
+
+/// @notice Vault has remaining balance, cannot remove
+/// @param vault The vault address
+/// @param balance The remaining balance
+error VaultHasBalance(address vault, uint256 balance);
+
 /// @notice Vault's underlying asset doesn't match NexusVault's asset
 /// @param expected Expected asset address
 /// @param actual Actual asset address from vault
@@ -68,9 +81,20 @@ error WeightSumInvalid(uint256 sum);
 /// @notice Individual weight value is invalid (zero or exceeds 100%)
 error InvalidWeight();
 
+/// @notice Invalid weight configuration
+/// @param targetWeight Target weight value
+/// @param maxWeight Maximum weight value
+/// @param minWeight Minimum weight value
+error InvalidWeightConfig(uint256 targetWeight, uint256 maxWeight, uint256 minWeight);
+
 /*//////////////////////////////////////////////////////////////
                         FEE ERRORS
 //////////////////////////////////////////////////////////////*/
+
+/// @notice Fee exceeds maximum allowed
+/// @param fee The fee value
+/// @param maxFee Maximum allowed fee
+error FeeExceedsMaximum(uint256 fee, uint256 maxFee);
 
 /// @notice Fee exceeds maximum allowed value
 /// @param feeType Type of fee (e.g., "management", "performance")
@@ -117,16 +141,35 @@ error InvalidReceiver();
 /// @param nextAllowedTime Timestamp when rebalance is next allowed
 error RebalanceCooldown(uint256 nextAllowedTime);
 
+/// @notice Rebalance cooldown is still active
+/// @param nextAllowedTime Timestamp when rebalance is next allowed
+error RebalanceCooldownActive(uint256 nextAllowedTime);
+
 /// @notice Slippage during rebalance exceeded maximum
 /// @param expected Expected amount
 /// @param actual Actual amount received
 error SlippageExceeded(uint256 expected, uint256 actual);
 
+/// @notice Slippage exceeded with detailed info
+/// @param assetsBefore Assets before operation
+/// @param assetsAfter Assets after operation
+/// @param maxSlippage Maximum allowed slippage
+error SlippageExceededDetailed(uint256 assetsBefore, uint256 assetsAfter, uint256 maxSlippage);
+
+/// @notice Slippage exceeds maximum allowed
+/// @param slippage The slippage value
+/// @param maxSlippage Maximum allowed slippage
+error SlippageExceedsMaximum(uint256 slippage, uint256 maxSlippage);
+
+/// @notice No active vaults available for operation
+error NoActiveVaults();
+
 /// @notice No rebalancing is needed (allocations within threshold)
 error NoRebalanceNeeded();
 
 /// @notice Rebalance threshold is invalid
-error InvalidThreshold();
+/// @param threshold The invalid threshold
+error InvalidThreshold(uint256 threshold);
 
 /*//////////////////////////////////////////////////////////////
                         STATE ERRORS
@@ -137,6 +180,9 @@ error VaultPaused();
 
 /// @notice Operation not allowed while vault is shutdown
 error VaultShutdown();
+
+/// @notice Vault is in shutdown state
+error VaultIsShutdown();
 
 /// @notice Pause operation called when already paused
 error AlreadyPaused();
@@ -161,6 +207,23 @@ error KeeperAlreadyExists(address keeper);
 /// @notice Keeper address not found
 /// @param keeper The keeper address not found
 error KeeperNotFound(address keeper);
+
+/// @notice Invalid keeper address
+error InvalidKeeper();
+
+/// @notice Invalid admin address
+error InvalidAdmin();
+
+/*//////////////////////////////////////////////////////////////
+                        RECOVERY ERRORS
+//////////////////////////////////////////////////////////////*/
+
+/// @notice Cannot recover the vault's underlying asset
+error CannotRecoverAsset();
+
+/// @notice Cannot recover underlying vault shares
+/// @param vault The vault share token address
+error CannotRecoverVaultShares(address vault);
 
 /*//////////////////////////////////////////////////////////////
                         REENTRANCY ERRORS
