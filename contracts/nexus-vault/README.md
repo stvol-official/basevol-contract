@@ -149,12 +149,46 @@ contracts/nexus-vault/
 ## Development Status
 
 - [x] Phase 1: Core Infrastructure (Storage, Auth, Init, ERC20)
-- [ ] Phase 2: ERC4626 Core
-- [ ] Phase 3: Multi-Vault & Rebalancing
-- [ ] Phase 4: Fee System & Security
-- [ ] Phase 5: Testing & Deployment
+- [x] Phase 2: ERC4626 Core (deposit, withdraw, mint, redeem)
+- [x] Phase 3: Multi-Vault & Rebalancing (Admin, Fee, Rebalance)
+- [x] Phase 4: Diamond & Deployment Scripts
+- [x] Phase 5: Testing & Documentation
+
+## Testing
+
+Run the test suite:
+
+```bash
+npx hardhat test test/nexus-vault/NexusVault.test.ts
+```
+
+Test coverage includes:
+- Diamond deployment and initialization
+- ERC20 functionality
+- ERC4626 vault operations
+- Multi-vault management
+- Access control
+- Emergency controls
+- Fee configuration
+
+## Deployment
+
+Deploy to testnet:
+```bash
+npx hardhat run --network base_sepolia scripts/nexus-vault/deploy-nexus-vault-diamond.ts
+```
+
+Deploy to mainnet:
+```bash
+npx hardhat run --network base scripts/nexus-vault/deploy-nexus-vault-diamond.ts
+```
+
+Generate combined ABI:
+```bash
+npx hardhat run scripts/nexus-vault/generate-nexus-vault-abi.ts
+```
 
 ---
 
 **Version**: 1.0.0  
-**Status**: 🚧 In Development
+**Status**: ✅ Development Complete
