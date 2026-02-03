@@ -621,11 +621,36 @@ contract BaseVolOneMin is
     (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
       .parsePayloadHeader(payload);
 
+    emit DebugLog(
+      string.concat(
+        "PayloadHeader: publishTime=",
+        Strings.toString(uint256(publishTime)),
+        " channel=",
+        Strings.toString(uint256(uint8(channel))),
+        " feedsLen=",
+        Strings.toString(uint256(feedsLen)),
+        " pos=",
+        Strings.toString(uint256(pos))
+      )
+    );
+
+    for (uint256 m = 0; m < priceLazerData.mappings.length; m++) {
+      emit DebugLog(
+        string.concat(
+          "PriceFeedMapping: priceFeedId=",
+          Strings.toString(priceLazerData.mappings[m].priceFeedId),
+          " productId=",
+          Strings.toString(priceLazerData.mappings[m].productId)
+        )
+      );
+    }
+
     uint256 publishTimeInSeconds = uint256(publishTime) / MICROSECONDS_PER_SECOND;
     require(timestamp >= publishTimeInSeconds, "Invalid publish time: future timestamp");
     require(timestamp - publishTimeInSeconds <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
 
-    if (channel != PythLazerLib.Channel.RealTime) {
+    // Allow RealTime(1) and FixedRate200(3); revert otherwise. (v2: use && not ||)
+    if (channel != PythLazerLib.Channel.RealTime && channel != PythLazerLib.Channel.FixedRate200) {
       revert InvalidChannel();
     }
 
@@ -633,6 +658,17 @@ contract BaseVolOneMin is
       uint32 feedId;
       uint8 numProperties;
       (feedId, numProperties, pos) = PythLazerLib.parseFeedHeader(payload, pos);
+
+      emit DebugLog(
+        string.concat(
+          "Feed: i=",
+          Strings.toString(uint256(i)),
+          " feedId=",
+          Strings.toString(uint256(feedId)),
+          " numProperties=",
+          Strings.toString(uint256(numProperties))
+        )
+      );
 
       uint64 price = 0;
       bool priceFound = false;

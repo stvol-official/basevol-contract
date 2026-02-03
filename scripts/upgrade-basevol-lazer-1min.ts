@@ -74,7 +74,8 @@ const upgrade = async () => {
   if (NETWORK.includes(networkName)) {
     console.log(`Upgrading to ${networkName} network...`);
 
-    // Compile contracts.
+    // Clean and compile so the latest source is always used (avoids stale cache).
+    await run("clean");
     await run("compile");
     console.log("Compiled contracts...");
 
@@ -93,6 +94,7 @@ const upgrade = async () => {
     });
 
     let baseVolContractAddress;
+    let addressToVerify: string;
     if (isSafeOwner === "N") {
       const baseVolContract = await upgrades.upgradeProxy(PROXY, BaseVolFactory, {
         kind: "uups",
@@ -101,7 +103,10 @@ const upgrade = async () => {
       });
       await baseVolContract.waitForDeployment();
       baseVolContractAddress = await baseVolContract.getAddress();
+      addressToVerify = await upgrades.erc1967.getImplementationAddress(baseVolContractAddress);
       console.log(`🍣 ${contractName} Contract upgraded at ${baseVolContractAddress}`);
+      console.log(`   New implementation (check this address on explorer): ${addressToVerify}`);
+      console.log(`   → https://sepolia.basescan.org/address/${addressToVerify}#code`);
     } else {
       const baseVolContract = await upgrades.prepareUpgrade(PROXY, BaseVolFactory, {
         kind: "uups",
@@ -109,6 +114,7 @@ const upgrade = async () => {
         unsafeAllowLinkedLibraries: true,
       });
       baseVolContractAddress = baseVolContract;
+      addressToVerify = baseVolContract as string;
       console.log(`�� New implementation contract deployed at: ${baseVolContract}`);
       console.log("Use this address in your Safe transaction to upgrade the proxy");
 
@@ -146,14 +152,25 @@ const upgrade = async () => {
 
     await sleep(6000);
 
-    console.log("Verifying contracts...");
-    await run("verify:verify", {
-      address: baseVolContractAddress,
-      network: network,
-      contract: `contracts/core/${contractName}.sol:${contractName}`,
-      constructorArguments: [],
-    });
-    console.log("verify the contractAction done");
+    console.log("Verifying implementation contract (skipping proxy verification to avoid Basescan v2 chainid issue)...");
+    try {
+      await run("verify:verify", {
+        address: addressToVerify,
+        network: network,
+        contract: `contracts/core/${contractName}.sol:${contractName}`,
+        constructorArguments: [],
+        force: true,
+      });
+      console.log("Verify done.");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("already verified") || msg.includes("ContractAlreadyVerifiedError")) {
+        console.log("Implementation already verified on block explorer. Skipping.");
+      } else {
+        throw e;
+      }
+    }
+    console.log("Proxy linking on block explorer may be done manually if needed.");
   } else {
     console.log(`Upgrading to ${networkName} network is not supported...`);
   }
