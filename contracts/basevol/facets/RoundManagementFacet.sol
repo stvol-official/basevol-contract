@@ -319,7 +319,8 @@ contract RoundManagementFacet {
     require(datetime >= publishTimeInSeconds, "Invalid publish time: future timestamp");
     require(datetime - publishTimeInSeconds <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
 
-    if (channel != PythLazerLib.Channel.RealTime) {
+    // Allow RealTime(1) and FixedRate200(3); revert otherwise (e.g. for 1min XAUT)
+    if (channel != PythLazerLib.Channel.RealTime && channel != PythLazerLib.Channel.FixedRate200) {
       revert LibBaseVolStrike.InvalidChannel();
     }
 
