@@ -649,11 +649,6 @@ contract BaseVolOneMin is
     require(timestamp >= publishTimeInSeconds, "Invalid publish time: future timestamp");
     require(timestamp - publishTimeInSeconds <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
 
-    // Allow RealTime(1) and FixedRate200(3); revert otherwise. (v2: use && not ||)
-    if (channel != PythLazerLib.Channel.RealTime && channel != PythLazerLib.Channel.FixedRate200) {
-      revert InvalidChannel();
-    }
-
     for (uint8 i = 0; i < feedsLen; i++) {
       uint32 feedId;
       uint8 numProperties;

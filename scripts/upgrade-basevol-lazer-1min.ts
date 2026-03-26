@@ -19,10 +19,10 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-const DEPLOYED_PROXY = "0x31e82Ce63b81c83E9eD1838B575F720BCD87029e"; // for testnet
-const PYTH_LAZER_LIB_ADDRESS = "0xB399824A08b1BECb58a499ac1D987f7441317204"; // for testnet
-// const DEPLOYED_PROXY = "0xcD771C92bE9CD5b2281B3452Ce32C8f620E5BAE1"; // for mainnet
-// const PYTH_LAZER_LIB_ADDRESS = "0xeCA480C76d8DB037dEab8aAe7F12e9C1867a37Ba"; // for mainnet
+// const DEPLOYED_PROXY = "0x31e82Ce63b81c83E9eD1838B575F720BCD87029e"; // for testnet
+// const PYTH_LAZER_LIB_ADDRESS = "0xB399824A08b1BECb58a499ac1D987f7441317204"; // for testnet
+const DEPLOYED_PROXY = "0xaECB62F8249D57fc1BDa3B453B67b3497FDcd4AE"; // for mainnet
+const PYTH_LAZER_LIB_ADDRESS = "0xCDa8D12dFE97da09A1685B9b9b13f68a8eC9cB8F"; // for mainnet
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -152,7 +152,9 @@ const upgrade = async () => {
 
     await sleep(6000);
 
-    console.log("Verifying implementation contract (skipping proxy verification to avoid Basescan v2 chainid issue)...");
+    console.log(
+      "Verifying implementation contract (skipping proxy verification to avoid Basescan v2 chainid issue)...",
+    );
     try {
       await run("verify:verify", {
         address: addressToVerify,
