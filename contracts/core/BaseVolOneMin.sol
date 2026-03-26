@@ -13,7 +13,20 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
 import { BaseVolOneMinStorage } from "../storage/BaseVolOneMinStorage.sol";
-import { Round, Coupon, WithdrawalRequest, ProductRound, SettlementResult, WinPosition, OneMinOrder, Position, ClosingOneMinOrder, PriceInfo, PriceUpdateData, PriceLazerData } from "../types/Types.sol";
+import {
+  Round,
+  Coupon,
+  WithdrawalRequest,
+  ProductRound,
+  SettlementResult,
+  WinPosition,
+  OneMinOrder,
+  Position,
+  ClosingOneMinOrder,
+  PriceInfo,
+  PriceUpdateData,
+  PriceLazerData
+} from "../types/Types.sol";
 import { IBaseVolErrors } from "../errors/BaseVolErrors.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
@@ -142,7 +155,6 @@ contract BaseVolOneMin is
         );
         continue;
       }
-
       try
         $.clearingHouse.lockInEscrow(
           address(this),
@@ -166,7 +178,6 @@ contract BaseVolOneMin is
         );
         continue;
       }
-
       $.oneMinOrders[order.idx] = order;
       emit DebugLog(string.concat("Order ", Strings.toString(order.idx), " added"));
     }
