@@ -21,14 +21,12 @@ const NETWORK_CONFIG = {
     blockExplorer: "https://sepolia.basescan.org",
     etherscanApiUrl: "https://api-sepolia.basescan.org/api",
     rpcUrl: "https://sepolia.base.org",
-    pythLazerLibAddress: "0x850ec04577295dd7e0a75228dfea3bb29328922e", // testnet
   },
   base: {
     chainId: 8453,
     blockExplorer: "https://basescan.org",
     etherscanApiUrl: "https://api.basescan.org/api",
     rpcUrl: "https://mainnet.base.org",
-    pythLazerLibAddress: "0x3A832CE3A1CEef0A065afD12a29526BE718f8B41", // https://basescan.org/address/0xF72a66D1e650dd25864710716afE794707D654F1#code -> Settings
   },
 };
 
@@ -92,23 +90,10 @@ function sleep(ms: number) {
 async function analyzeFacet(
   facetInfo: { name: string; path: string },
   diamondAddress: string,
-  pythLazerLibAddress?: string,
 ): Promise<FacetAnalysis> {
   console.log(`🔍 Analyzing ${facetInfo.name}...`);
 
-  // Check if this facet needs PythLazerLib
-  const needsPythLazerLib = facetInfo.name === "RoundManagementFacet";
-
-  let FacetFactory;
-  if (needsPythLazerLib && pythLazerLibAddress) {
-    FacetFactory = await ethers.getContractFactory(facetInfo.path, {
-      libraries: {
-        PythLazerLib: pythLazerLibAddress,
-      },
-    });
-  } else {
-    FacetFactory = await ethers.getContractFactory(facetInfo.path);
-  }
+  const FacetFactory = await ethers.getContractFactory(facetInfo.path);
 
   const newFacet = await FacetFactory.deploy();
   await newFacet.waitForDeployment();
@@ -283,17 +268,6 @@ const main = async () => {
   const [deployer] = await ethers.getSigners();
   console.log("Deployer:", deployer.address);
 
-  // Use existing PythLazerLib if needed
-  let pythLazerLibAddress: string | undefined;
-  const needsPythLazerLib = selectedFacets.some(
-    (facet: any) => facet.name === "RoundManagementFacet",
-  );
-
-  if (needsPythLazerLib) {
-    pythLazerLibAddress = NETWORK_CONFIG[networkName].pythLazerLibAddress;
-    console.log(`📡 Using existing PythLazerLib at: ${pythLazerLibAddress}\n`);
-  }
-
   console.log(`\n🔍 Analyzing ${selectedFacets.length} facet(s) for changes...\n`);
 
   const facetAnalyses: FacetAnalysis[] = [];
@@ -304,7 +278,7 @@ const main = async () => {
     console.log(`[${i + 1}/${selectedFacets.length}] Analyzing ${facet.name}...`);
 
     try {
-      const analysis = await analyzeFacet(facet, DIAMOND_ADDRESS, pythLazerLibAddress);
+      const analysis = await analyzeFacet(facet, DIAMOND_ADDRESS);
       facetAnalyses.push(analysis);
       totalCuts.push(...analysis.cuts);
 

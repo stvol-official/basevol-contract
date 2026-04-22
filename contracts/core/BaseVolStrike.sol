@@ -7,8 +7,9 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
+import "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import { PythLazer } from "../libraries/PythLazer.sol";
-import { PythLazerLib } from "../libraries/PythLazerLib.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
@@ -23,7 +24,6 @@ import {
   WinPosition,
   PriceInfo,
   PriceUpdateData,
-  PriceLazerData,
   PriceData
 } from "../types/Types.sol";
 import { IBaseVolErrors } from "../errors/BaseVolErrors.sol";
@@ -42,10 +42,9 @@ abstract contract BaseVolStrike is
   uint256 private constant PRICE_UNIT = 1e6;
   uint256 private constant BASE = 10000; // 100%
   uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
-  uint256 private constant BUFFER_SECONDS = 600; // 10 * 60 (10min)
-  uint256 private constant MAX_PRICE_AGE = 300; // 5 * 60 (5min) - maximum age of price data in seconds
   uint256 private constant MAX_PRICE_DEVIATION_BPS = 5000; // 50% maximum price deviation (basis points)
-  uint256 private constant MICROSECONDS_PER_SECOND = 1_000_000; // Pyth publishTime is in microseconds
+  uint256 private constant IPYTH_PARSE_BUFFER_SECONDS = 600; // 10 * 60 (10min), Pyth parsePriceFeedUpdates time window
+  address private constant PYTH_LAZER_DEFAULT = 0xACeA761c27A909d4D3895128EBe6370FDE2dF481;
 
   // Abstract functions
   function _getStartTimestamp() internal pure virtual returns (uint256);
@@ -93,6 +92,7 @@ abstract contract BaseVolStrike is
 
   function initialize(
     address _usdcAddress,
+    address _oracleAddress,
     address _adminAddress,
     address _operatorAddress,
     uint256 _commissionfee,
@@ -109,10 +109,14 @@ abstract contract BaseVolStrike is
 
     $.token = IERC20(_usdcAddress);
     $.clearingHouse = IClearingHouse(_clearingHouseAddress);
-    $.pythLazer = PythLazer(0xACeA761c27A909d4D3895128EBe6370FDE2dF481);
+    $.pythLazer = PythLazer(PYTH_LAZER_DEFAULT);
+    $.oracle = IPyth(_oracleAddress);
     $.adminAddress = _adminAddress;
     $.operatorAddress = _operatorAddress;
     $.commissionfee = _commissionfee;
+
+    _setPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
+    _setPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");
   }
 
   function currentEpoch() external view returns (uint256) {
@@ -120,13 +124,13 @@ abstract contract BaseVolStrike is
   }
 
   function executeRound(
-    PriceLazerData calldata priceLazerData,
+    PriceUpdateData[] calldata updateDataWithIds,
     uint64 initDate,
     bool skipSettlement
   ) external payable whenNotPaused onlyOperator {
     if ((initDate - _getStartTimestamp()) % _getIntervalSeconds() != 0) revert InvalidInitDate(); // Ensure initDate aligns with the interval boundary
 
-    PriceData[] memory priceData = _processPythLazerPriceUpdate(priceLazerData, initDate);
+    PriceData[] memory priceData = _processPythPriceUpdate(updateDataWithIds, initDate);
 
     uint256 startEpoch = _epochAt(initDate);
     uint256 currentEpochNumber = _epochAt(block.timestamp);
@@ -544,6 +548,28 @@ abstract contract BaseVolStrike is
     $.pythLazer = PythLazer(_pythLazer);
   }
 
+  function setOracle(address _oracle) external whenPaused onlyAdmin {
+    if (_oracle == address(0)) revert InvalidAddress();
+    BaseVolStrikeStorage.Layout storage $ = _getStorage();
+    $.oracle = IPyth(_oracle);
+  }
+
+  function addPriceId(
+    bytes32 _priceId,
+    uint256 _productId,
+    string calldata _symbol
+  ) external onlyOperator {
+    _setPriceId(_priceId, _productId, _symbol);
+  }
+
+  function initializeDefaultPriceIds() external onlyOperator {
+    _setPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
+    _setPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");
+    _setPriceId(0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2, 2, "XAUT/USD");
+    _setPriceId(0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d, 3, "SOL/USD");
+    _setPriceId(0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8, 4, "XRP/USD");
+  }
+
   function unpause() external whenPaused onlyAdmin {
     _unpause();
   }
@@ -690,23 +716,35 @@ abstract contract BaseVolStrike is
     return $.lastSettledFilledOrderId;
   }
 
+  function priceInfos() external view returns (PriceInfo[] memory) {
+    BaseVolStrikeStorage.Layout storage $ = _getStorage();
+    PriceInfo[] memory priceInfoArray = new PriceInfo[]($.priceIdCount);
+    for (uint256 i = 0; i < $.priceIdCount; i++) {
+      priceInfoArray[i] = $.priceInfos[i];
+    }
+    return priceInfoArray;
+  }
+
   /* internal functions */
-  function _processPythLazerPriceUpdate(
-    PriceLazerData memory priceLazerData,
-    uint64 datetime
+  function _processPythPriceUpdate(
+    PriceUpdateData[] calldata updateDataWithIds,
+    uint64 initDate
   ) internal returns (PriceData[] memory) {
     BaseVolStrikeStorage.Layout storage $ = _getStorage();
 
-    uint256 verificationFee = $.pythLazer.verification_fee();
-    if (msg.value < verificationFee) {
-      revert InsufficientVerificationFee(verificationFee, msg.value);
+    bytes[] memory updateData = new bytes[](updateDataWithIds.length);
+    bytes32[] memory priceIds = new bytes32[](updateDataWithIds.length);
+
+    for (uint256 i = 0; i < updateDataWithIds.length; i++) {
+      updateData[i] = updateDataWithIds[i].priceData;
+      priceIds[i] = $.priceInfos[updateDataWithIds[i].productId].priceId;
     }
 
-    (bytes memory payload, ) = $.pythLazer.verifyUpdate{ value: verificationFee }(
-      priceLazerData.priceData
-    );
-
-    uint256 excessAmount = msg.value - verificationFee;
+    uint256 fee = $.oracle.getUpdateFee(updateData);
+    if (msg.value < fee) {
+      revert InsufficientVerificationFee(fee, msg.value);
+    }
+    uint256 excessAmount = msg.value - fee;
     if (excessAmount > 0) {
       (bool success, ) = payable(msg.sender).call{ value: excessAmount }("");
       if (!success) {
@@ -716,56 +754,60 @@ abstract contract BaseVolStrike is
       }
     }
 
-    (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
-      .parsePayloadHeader(payload);
-    uint256 publishTimeInSeconds = uint256(publishTime) / MICROSECONDS_PER_SECOND;
-    require(datetime >= publishTimeInSeconds, "Invalid publish time: future timestamp");
-    require(datetime - publishTimeInSeconds <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
+    PythStructs.PriceFeed[] memory feeds = $.oracle.parsePriceFeedUpdates{ value: fee }(
+      updateData,
+      priceIds,
+      initDate,
+      initDate + uint64(IPYTH_PARSE_BUFFER_SECONDS)
+    );
 
-    PriceData[] memory tempData = new PriceData[](feedsLen);
-    uint256 validCount = 0;
-
-    for (uint8 i = 0; i < feedsLen; i++) {
-      uint32 feedId;
-      uint8 numProperties;
-      (feedId, numProperties, pos) = PythLazerLib.parseFeedHeader(payload, pos);
-
-      uint64 price = 0;
-      bool priceFound = false;
-
-      for (uint8 j = 0; j < numProperties; j++) {
-        PythLazerLib.PriceFeedProperty property;
-        (property, pos) = PythLazerLib.parseFeedProperty(payload, pos);
-        if (property == PythLazerLib.PriceFeedProperty.Price) {
-          (price, pos) = PythLazerLib.parseFeedValueUint64(payload, pos);
-          priceFound = true;
-        }
-      }
-
-      if (priceFound && price > 0) {
-        uint256 productId = type(uint256).max;
-        for (uint256 k = 0; k < priceLazerData.mappings.length; k++) {
-          if (priceLazerData.mappings[k].priceFeedId == uint256(feedId)) {
-            productId = priceLazerData.mappings[k].productId;
-            break;
-          }
-        }
-
-        // Check if productId is valid and price is reasonable
-        if (productId != type(uint256).max) {
-          tempData[validCount] = PriceData({ productId: productId, price: price });
-          validCount++;
-        }
-      }
+    PriceData[] memory priceData = new PriceData[](feeds.length);
+    for (uint256 i = 0; i < feeds.length; i++) {
+      priceData[i] = PriceData({
+        productId: updateDataWithIds[i].productId,
+        price: uint64(feeds[i].price.price)
+      });
     }
-
-    PriceData[] memory priceData = new PriceData[](validCount);
-
-    for (uint256 i = 0; i < validCount; i++) {
-      priceData[i] = tempData[i];
-    }
-
     return priceData;
+  }
+
+  /// @dev Idempotent when priceId+symbol for product already match. Otherwise upserts; increments count only for new product slot.
+  function _setPriceId(bytes32 _priceId, uint256 _productId, string memory _symbol) internal {
+    BaseVolStrikeStorage.Layout storage $ = _getStorage();
+    if (_priceId == bytes32(0)) revert InvalidPriceId();
+    if (bytes(_symbol).length == 0) {
+      revert InvalidSymbol();
+    }
+
+    if (
+      $.priceInfos[_productId].priceId == _priceId &&
+      keccak256(bytes($.priceInfos[_productId].symbol)) == keccak256(bytes(_symbol))
+    ) {
+      return;
+    }
+
+    uint256 existingProductId = $.priceIdToProductId[_priceId];
+    if (existingProductId != _productId) {
+      if (existingProductId != 0 || $.priceInfos[0].priceId == _priceId) {
+        revert PriceIdAlreadyExists();
+      }
+    }
+
+    bytes32 oldPriceId = $.priceInfos[_productId].priceId;
+    if (oldPriceId != bytes32(0)) {
+      delete $.priceIdToProductId[oldPriceId];
+    } else {
+      $.priceIdCount++;
+    }
+
+    $.priceInfos[_productId] = PriceInfo({
+      priceId: _priceId,
+      productId: _productId,
+      symbol: _symbol
+    });
+    $.priceIdToProductId[_priceId] = _productId;
+
+    emit PriceIdAdded(_productId, _priceId, _symbol);
   }
 
   function _settleFilledOrders(Round storage round) internal {

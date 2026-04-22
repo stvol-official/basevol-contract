@@ -4,8 +4,9 @@ pragma solidity ^0.8.4;
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IVaultManager } from "../interfaces/IVaultManager.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
-import { Round, OneMinOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo } from "../types/Types.sol";
+import { IPyth } from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import { PythLazer } from "../libraries/PythLazer.sol";
+import { Round, OneMinOrder, SettlementResult, WithdrawalRequest, Coupon, PriceInfo } from "../types/Types.sol";
 
 library BaseVolOneMinStorage {
   // keccak256(abi.encode(uint256(keccak256("com.basevol.storage.onemin.secure")) - 1)) & ~bytes32(uint256(0xff));
@@ -27,6 +28,10 @@ library BaseVolOneMinStorage {
     mapping(uint256 => mapping(uint256 => uint64)) priceHistory; // timestamp => productId => price
     mapping(uint256 => OneMinOrder) oneMinOrders; // key: order idx
     address vault;
+    IPyth oracle;
+    mapping(uint256 => PriceInfo) priceInfos; // key: productId
+    mapping(bytes32 => uint256) priceIdToProductId;
+    uint256 priceIdCount;
     /* IMPROTANT: you can add new variables here */
   }
 

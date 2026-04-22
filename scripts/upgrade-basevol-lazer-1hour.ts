@@ -20,9 +20,7 @@ import input from "@inquirer/input";
 
 const NETWORK = ["base_sepolia", "base"];
 // const DEPLOYED_PROXY = "0x26b0A1e85f66C4864d6ABB3B146714494B56A673"; // for testnet
-// const PYTH_LAZER_LIB_ADDRESS = "0xB399824A08b1BECb58a499ac1D987f7441317204"; // for testnet
 const DEPLOYED_PROXY = "0x74b8b5e70B81f52d119aeF431682DB302Ddd91F4"; // for mainnet
-const PYTH_LAZER_LIB_ADDRESS = "0xB6ecc33C7322AbA4fcBd6dee93B27A643F848C54"; // for mainnet
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -78,26 +76,15 @@ const upgrade = async () => {
     await run("compile");
     console.log("Compiled contracts...");
 
-    // Use existing library address instead of deploying new one
-    console.log(`📡 Using existing PythLazerLib at ${PYTH_LAZER_LIB_ADDRESS}`);
+    const BaseVolFactory = await ethers.getContractFactory(contractName);
 
-    // Deploy contracts with existing library linking
-    const BaseVolFactory = await ethers.getContractFactory(contractName, {
-      libraries: {
-        PythLazerLib: PYTH_LAZER_LIB_ADDRESS,
-      },
-    });
-
-    const baseVolContract = await upgrades.forceImport(PROXY, BaseVolFactory, {
-      kind: "uups",
-    });
+    const baseVolContract = await upgrades.forceImport(PROXY, BaseVolFactory, { kind: "uups" });
 
     let baseVolContractAddress;
     if (isSafeOwner === "N") {
       const baseVolContract = await upgrades.upgradeProxy(PROXY, BaseVolFactory, {
         kind: "uups",
         redeployImplementation: "always",
-        unsafeAllowLinkedLibraries: true,
       });
       await baseVolContract.waitForDeployment();
       baseVolContractAddress = await baseVolContract.getAddress();
@@ -106,7 +93,6 @@ const upgrade = async () => {
       const baseVolContract = await upgrades.prepareUpgrade(PROXY, BaseVolFactory, {
         kind: "uups",
         redeployImplementation: "always",
-        unsafeAllowLinkedLibraries: true,
       });
       baseVolContractAddress = baseVolContract;
       console.log(`New implementation contract deployed at: ${baseVolContract}`);

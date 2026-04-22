@@ -69,44 +69,15 @@ async function compareFacets(): Promise<FacetComparison[]> {
 
   const results: FacetComparison[] = [];
 
-  // Deploy PythLazerLib for RoundManagementFacet
-  console.log("📚 Deploying PythLazerLib for RoundManagementFacet...");
-  const PythLazerLibFactory = await ethers.getContractFactory("PythLazerLib");
-  const pythLazerLib = await PythLazerLibFactory.deploy();
-  await pythLazerLib.waitForDeployment();
-  const pythLazerLibAddress = await pythLazerLib.getAddress();
-  console.log("✅ PythLazerLib deployed to:", pythLazerLibAddress);
-  console.log();
-
   for (const comparison of FACET_COMPARISONS) {
     console.log(`📋 Analyzing ${comparison.facetName}...`);
     console.log("-".repeat(80));
 
     try {
-      // Get legacy facet interface
-      let legacyFactory;
-      if (comparison.facetName === "RoundManagementFacet") {
-        legacyFactory = await ethers.getContractFactory(comparison.legacyPath, {
-          libraries: {
-            PythLazerLib: pythLazerLibAddress,
-          },
-        });
-      } else {
-        legacyFactory = await ethers.getContractFactory(comparison.legacyPath);
-      }
+      const legacyFactory = await ethers.getContractFactory(comparison.legacyPath);
       const legacySelectors = getSelectors(legacyFactory.interface);
 
-      // Get new facet interface
-      let newFactory;
-      if (comparison.facetName === "RoundManagementFacet") {
-        newFactory = await ethers.getContractFactory(comparison.newPath, {
-          libraries: {
-            PythLazerLib: pythLazerLibAddress,
-          },
-        });
-      } else {
-        newFactory = await ethers.getContractFactory(comparison.newPath);
-      }
+      const newFactory = await ethers.getContractFactory(comparison.newPath);
       const newSelectors = getSelectors(newFactory.interface);
 
       // Compare selectors

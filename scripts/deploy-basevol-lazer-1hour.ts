@@ -56,11 +56,12 @@ const main = async () => {
     // Check if the addresses in the config are set.
     if (
       config.Address.Usdc[networkName] === ethers.ZeroAddress ||
+      config.Address.Oracle[networkName] === ethers.ZeroAddress ||
       config.Address.Admin[networkName] === ethers.ZeroAddress ||
       config.Address.Operator[networkName] === ethers.ZeroAddress ||
       config.Address.ClearingHouse[networkName] === ethers.ZeroAddress
     ) {
-      throw new Error("Missing addresses (Admin/Operator)");
+      throw new Error("Missing addresses (USDC/Oracle/Admin/Operator/ClearingHouse)");
     }
 
     // Compile contracts.
@@ -71,35 +72,25 @@ const main = async () => {
     console.log("===========================================");
     console.log("Owner: %s", deployer.address);
     console.log("Usdc: %s", config.Address.Usdc[networkName]);
+    console.log("Pyth (IPyth): %s", config.Address.Oracle[networkName]);
     console.log("Admin: %s", config.Address.Admin[networkName]);
     console.log("Operator: %s", config.Address.Operator[networkName]);
     console.log("CommissionFee: %s", config.CommissionFee[networkName]);
     console.log("ClearingHouse: %s", config.Address.ClearingHouse[networkName]);
     console.log("===========================================");
 
-    // Deploy libraries first
-    const PythLazerLibFactory = await ethers.getContractFactory("PythLazerLib");
-    const pythLazerLib = await PythLazerLibFactory.deploy();
-    await pythLazerLib.waitForDeployment();
-    const pythLazerLibAddress = await pythLazerLib.getAddress();
-    console.log(`📡 PythLazerLib deployed at ${pythLazerLibAddress}`);
-
-    // Deploy contracts.
-    const BaseVolFactory = await ethers.getContractFactory(contractName, {
-      libraries: {
-        PythLazerLib: pythLazerLibAddress,
-      },
-    });
+    const BaseVolFactory = await ethers.getContractFactory(contractName);
     const baseVolContract = await upgrades.deployProxy(
       BaseVolFactory,
       [
         config.Address.Usdc[networkName],
+        config.Address.Oracle[networkName],
         config.Address.Admin[networkName],
         config.Address.Operator[networkName],
         config.CommissionFee[networkName],
         config.Address.ClearingHouse[networkName],
       ],
-      { kind: "uups", initializer: "initialize", unsafeAllowLinkedLibraries: true },
+      { kind: "uups", initializer: "initialize" },
     );
 
     await baseVolContract.waitForDeployment();

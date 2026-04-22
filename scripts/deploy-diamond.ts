@@ -140,32 +140,25 @@ export async function deployDiamond(
     }
   };
 
-  // 1. Deploy PythLazerLib first
-  const PythLazerLibFactory = await ethers.getContractFactory("PythLazerLib");
-  const pythLazerLib = await PythLazerLibFactory.deploy();
-  await pythLazerLib.waitForDeployment();
-  const pythLazerLibAddress = await pythLazerLib.getAddress();
-  console.log("PythLazerLib deployed to:", pythLazerLibAddress);
-
-  // 2. Deploy DiamondCutFacet
+  // 1. Deploy DiamondCutFacet
   const DiamondCutFacet = await ethers.getContractFactory("DiamondCutFacet");
   const diamondCutFacet = await deployWithRetry(DiamondCutFacet);
   const diamondCutFacetAddress = await diamondCutFacet.getAddress();
   console.log("DiamondCutFacet deployed to:", diamondCutFacetAddress);
 
-  // 3. Deploy Diamond
+  // 2. Deploy Diamond
   const Diamond = await ethers.getContractFactory("Diamond");
   const diamond = await deployWithRetry(Diamond, [deployer.address, diamondCutFacetAddress]);
   const diamondAddress = await diamond.getAddress();
   console.log("Diamond deployed to:", diamondAddress);
 
-  // 4. Deploy DiamondInit
+  // 3. Deploy DiamondInit
   const DiamondInit = await ethers.getContractFactory("DiamondInit");
   const diamondInit = await deployWithRetry(DiamondInit);
   const diamondInitAddress = await diamondInit.getAddress();
   console.log("DiamondInit deployed to:", diamondInitAddress);
 
-  // 5. Deploy all facets with PythLazerLib library
+  // 4. Deploy all facets
   const facetNames = [
     "DiamondLoupeFacet",
     "InitializationFacet",
@@ -179,19 +172,8 @@ export async function deployDiamond(
   const cut: FacetCut[] = [];
   const facetAddresses: Record<string, string> = {};
 
-  const facetsWithPythLazerLib = ["RoundManagementFacet"];
-
   for (const FacetName of facetNames) {
-    let Facet;
-    if (facetsWithPythLazerLib.includes(FacetName)) {
-      Facet = await ethers.getContractFactory(FacetName, {
-        libraries: {
-          PythLazerLib: pythLazerLibAddress,
-        },
-      });
-    } else {
-      Facet = await ethers.getContractFactory(FacetName);
-    }
+    const Facet = await ethers.getContractFactory(FacetName);
     const facet = await Facet.deploy();
     await facet.waitForDeployment();
 
@@ -206,7 +188,7 @@ export async function deployDiamond(
     });
   }
 
-  // 6. Execute diamond cut
+  // 5. Execute diamond cut
   const diamondCut = await ethers.getContractAt("IDiamondCut", await diamond.getAddress());
 
   const functionCall = diamondInit.interface.encodeFunctionData("init", [

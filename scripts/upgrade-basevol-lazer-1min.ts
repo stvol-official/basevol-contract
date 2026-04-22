@@ -20,9 +20,7 @@ import input from "@inquirer/input";
 
 const NETWORK = ["base_sepolia", "base"];
 // const DEPLOYED_PROXY = "0x31e82Ce63b81c83E9eD1838B575F720BCD87029e"; // for testnet
-// const PYTH_LAZER_LIB_ADDRESS = "0xB399824A08b1BECb58a499ac1D987f7441317204"; // for testnet
 const DEPLOYED_PROXY = "0xaECB62F8249D57fc1BDa3B453B67b3497FDcd4AE"; // for mainnet
-const PYTH_LAZER_LIB_ADDRESS = "0xCDa8D12dFE97da09A1685B9b9b13f68a8eC9cB8F"; // for mainnet
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -79,19 +77,9 @@ const upgrade = async () => {
     await run("compile");
     console.log("Compiled contracts...");
 
-    // Use existing library address instead of deploying new one
-    console.log(`📡 Using existing PythLazerLib at ${PYTH_LAZER_LIB_ADDRESS}`);
+    const BaseVolFactory = await ethers.getContractFactory(contractName);
 
-    // Deploy contracts with existing library linking
-    const BaseVolFactory = await ethers.getContractFactory(contractName, {
-      libraries: {
-        PythLazerLib: PYTH_LAZER_LIB_ADDRESS,
-      },
-    });
-
-    const baseVolContract = await upgrades.forceImport(PROXY, BaseVolFactory, {
-      kind: "uups",
-    });
+    const baseVolContract = await upgrades.forceImport(PROXY, BaseVolFactory, { kind: "uups" });
 
     let baseVolContractAddress;
     let addressToVerify: string;
@@ -99,7 +87,6 @@ const upgrade = async () => {
       const baseVolContract = await upgrades.upgradeProxy(PROXY, BaseVolFactory, {
         kind: "uups",
         redeployImplementation: "always",
-        unsafeAllowLinkedLibraries: true,
       });
       await baseVolContract.waitForDeployment();
       baseVolContractAddress = await baseVolContract.getAddress();
@@ -111,7 +98,6 @@ const upgrade = async () => {
       const baseVolContract = await upgrades.prepareUpgrade(PROXY, BaseVolFactory, {
         kind: "uups",
         redeployImplementation: "always",
-        unsafeAllowLinkedLibraries: true,
       });
       baseVolContractAddress = baseVolContract;
       addressToVerify = baseVolContract as string;

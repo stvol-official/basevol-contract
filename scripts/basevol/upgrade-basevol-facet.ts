@@ -37,8 +37,6 @@ const AVAILABLE_FACETS = [
   {
     name: "RoundManagementFacet",
     path: "contracts/basevol/facets/RoundManagementFacet.sol:RoundManagementFacet",
-    requiresLibrary: true,
-    library: "PythLazerLib",
   },
   {
     name: "AdminFacet",
@@ -69,8 +67,6 @@ interface FacetCut {
 interface FacetInfo {
   name: string;
   path: string;
-  requiresLibrary?: boolean;
-  library?: string;
   address?: string;
   functionSelectors?: string[];
 }
@@ -122,22 +118,11 @@ async function waitForContractCode(
 async function analyzeFacet(
   facetInfo: FacetInfo,
   diamondAddress: string,
-  pythLazerLibAddress?: string,
 ): Promise<FacetAnalysis> {
   console.log(`🔍 Analyzing ${facetInfo.name}...`);
 
   // 1. Deploy new facet and get selectors
-  let FacetFactory;
-  if (facetInfo.requiresLibrary && facetInfo.library && pythLazerLibAddress) {
-    console.log(`  📚 Using library: ${facetInfo.library} at ${pythLazerLibAddress}`);
-    FacetFactory = await ethers.getContractFactory(facetInfo.path, {
-      libraries: {
-        [facetInfo.library]: pythLazerLibAddress,
-      },
-    });
-  } else {
-    FacetFactory = await ethers.getContractFactory(facetInfo.path);
-  }
+  const FacetFactory = await ethers.getContractFactory(facetInfo.path);
 
   // Deploy with retry on "already known" error
   let newFacet;
@@ -334,19 +319,6 @@ const main = async () => {
   const [deployer] = await ethers.getSigners();
   console.log("Deployer:", deployer.address);
 
-  // Deploy PythLazerLib if needed
-  let pythLazerLibAddress: string | undefined;
-  const needsLibrary = selectedFacets.some((f: any) => f.requiresLibrary);
-
-  if (needsLibrary) {
-    console.log("\n📚 Deploying PythLazerLib (required for RoundManagementFacet)...");
-    const PythLazerLibFactory = await ethers.getContractFactory("PythLazerLib");
-    const pythLazerLib = await PythLazerLibFactory.deploy();
-    await pythLazerLib.waitForDeployment();
-    pythLazerLibAddress = await pythLazerLib.getAddress();
-    console.log("✅ PythLazerLib deployed to:", pythLazerLibAddress);
-  }
-
   console.log(`\n🔍 Analyzing ${selectedFacets.length} facet(s) for changes...\n`);
 
   // 3. Analyze and deploy each facet
@@ -358,7 +330,7 @@ const main = async () => {
     console.log(`[${i + 1}/${selectedFacets.length}] Analyzing ${facet.name}...`);
 
     try {
-      const analysis = await analyzeFacet(facet, DIAMOND_ADDRESS, pythLazerLibAddress);
+      const analysis = await analyzeFacet(facet, DIAMOND_ADDRESS);
       facetAnalyses.push(analysis);
       totalCuts.push(...analysis.cuts);
 

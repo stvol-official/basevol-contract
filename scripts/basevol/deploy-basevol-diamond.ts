@@ -80,15 +80,7 @@ export async function deployBaseVolDiamond(
   console.log("\n🚀 Deploying BaseVol Diamond with new structure...");
   console.log("Deployer:", deployer.address);
 
-  // 1. Deploy PythLazerLib first (needed for RoundManagementFacet)
-  console.log("\n📦 Deploying PythLazerLib...");
-  const PythLazerLibFactory = await ethers.getContractFactory("PythLazerLib");
-  const pythLazerLib = await PythLazerLibFactory.deploy();
-  await pythLazerLib.waitForDeployment();
-  const pythLazerLibAddress = await pythLazerLib.getAddress();
-  console.log("✅ PythLazerLib deployed to:", pythLazerLibAddress);
-
-  // 2. Deploy DiamondCutFacet (using diamond-common)
+  // 1. Deploy DiamondCutFacet (using diamond-common)
   console.log("\n📦 Deploying DiamondCutFacet...");
   const DiamondCutFacet = await ethers.getContractFactory(
     "contracts/diamond-common/facets/DiamondCutFacet.sol:DiamondCutFacet",
@@ -104,7 +96,7 @@ export async function deployBaseVolDiamond(
     throw new Error(`DiamondCutFacet code not available at ${diamondCutFacetAddress}`);
   }
 
-  // 3. Deploy Diamond (using diamond-common)
+  // 2. Deploy Diamond (using diamond-common)
   console.log("\n💎 Deploying Diamond...");
   const Diamond = await ethers.getContractFactory("contracts/diamond-common/Diamond.sol:Diamond");
   const diamond = await Diamond.deploy(deployer.address, diamondCutFacetAddress);
@@ -112,7 +104,7 @@ export async function deployBaseVolDiamond(
   const diamondAddress = await diamond.getAddress();
   console.log("✅ Diamond deployed to:", diamondAddress);
 
-  // 4. Deploy DiamondInit (using upgradeInitializers - legacy compatible)
+  // 3. Deploy DiamondInit (using upgradeInitializers - legacy compatible)
   console.log("\n📦 Deploying DiamondInit...");
   const DiamondInit = await ethers.getContractFactory(
     "contracts/upgradeInitializers/DiamondInit.sol:DiamondInit",
@@ -122,7 +114,7 @@ export async function deployBaseVolDiamond(
   const diamondInitAddress = await diamondInit.getAddress();
   console.log("✅ DiamondInit deployed to:", diamondInitAddress);
 
-  // 5. Deploy all BaseVol facets (from new structure) - Sequential deployment
+  // 4. Deploy all BaseVol facets (from new structure) - Sequential deployment
   console.log("\n📦 Deploying BaseVol Facets (new structure)...");
 
   const facetAddresses: Record<string, string> = {};
@@ -149,15 +141,10 @@ export async function deployBaseVolDiamond(
   facetAddresses["InitializationFacet"] = initializationFacetAddress;
   console.log("  ✅ InitializationFacet:", initializationFacetAddress);
 
-  // RoundManagementFacet (from basevol, with PythLazerLib)
+  // RoundManagementFacet (from basevol)
   console.log("  Deploying RoundManagementFacet...");
   const RoundManagementFacet = await ethers.getContractFactory(
     "contracts/basevol/facets/RoundManagementFacet.sol:RoundManagementFacet",
-    {
-      libraries: {
-        PythLazerLib: pythLazerLibAddress,
-      },
-    },
   );
   const roundManagementFacet = await RoundManagementFacet.deploy();
   await roundManagementFacet.waitForDeployment();

@@ -7,20 +7,15 @@ import { PriceUpdateData, PriceData, Round, FilledOrder, Position } from "../typ
 import { PythStructs } from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { PythLazer } from "../libraries/PythLazer.sol";
-import { PythLazerLib } from "../libraries/PythLazerLib.sol";
-import { PriceLazerData } from "../types/Types.sol";
 
 contract RoundManagementFacet {
   using LibBaseVolStrike for LibBaseVolStrike.DiamondStorage;
   using SafeERC20 for IERC20;
 
   uint256 private constant PRICE_UNIT = 1e6;
-  uint256 private constant BUFFER_SECONDS = 600; // 10 * 60 (10min)
-  uint256 private constant MAX_PRICE_AGE = 300; // 5 * 60 (5min) - maximum age of price data in seconds
+  uint256 private constant IPYTH_PARSE_BUFFER_SECONDS = 600; // 10 * 60 (10min)
   uint256 private constant MAX_PRICE_DEVIATION_BPS = 5000; // 50% maximum price deviation (basis points)
   uint256 private constant BPS_DENOMINATOR = 10000;
-  uint256 private constant MICROSECONDS_PER_SECOND = 1_000_000; // Pyth publishTime is in microseconds
 
   event StartRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
   event EndRound(uint256 indexed epoch, uint256 productId, uint256 price, uint256 timestamp);
@@ -39,14 +34,14 @@ contract RoundManagementFacet {
   }
 
   function executeRound(
-    PriceLazerData calldata priceLazerData,
+    PriceUpdateData[] calldata updateDataWithIds,
     uint64 initDate,
     bool skipSettlement
   ) external payable onlyOperator {
     if ((initDate - _getStartTimestamp()) % _getIntervalSeconds() != 0)
       revert LibBaseVolStrike.InvalidInitDate();
 
-    PriceData[] memory priceData = _processPythLazerPriceUpdate(priceLazerData, initDate);
+    PriceData[] memory priceData = _processPythPriceUpdate(updateDataWithIds, initDate);
     // Validate priceData array is not empty
     require(priceData.length > 0, "Empty price data");
 
@@ -240,10 +235,10 @@ contract RoundManagementFacet {
     return epoch;
   }
 
-  function _getPythPrices(
-    PriceUpdateData[] memory updateDataWithIds,
-    uint64 timestamp
-  ) internal returns (PythStructs.PriceFeed[] memory) {
+  function _processPythPriceUpdate(
+    PriceUpdateData[] calldata updateDataWithIds,
+    uint64 initDate
+  ) internal returns (PriceData[] memory) {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
 
     bytes[] memory updateData = new bytes[](updateDataWithIds.length);
@@ -254,32 +249,11 @@ contract RoundManagementFacet {
       priceIds[i] = bvs.priceInfos[updateDataWithIds[i].productId].priceId;
     }
 
-    uint fee = bvs.oracle.getUpdateFee(updateData);
-    return
-      bvs.oracle.parsePriceFeedUpdates{ value: fee }(
-        updateData,
-        priceIds,
-        timestamp,
-        timestamp + uint64(BUFFER_SECONDS)
-      );
-  }
-
-  function _processPythLazerPriceUpdate(
-    PriceLazerData memory priceLazerData,
-    uint64 datetime
-  ) internal returns (PriceData[] memory) {
-    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-
-    uint256 verificationFee = bvs.pythLazer.verification_fee();
-    if (msg.value < verificationFee) {
+    uint256 fee = bvs.oracle.getUpdateFee(updateData);
+    if (msg.value < fee) {
       revert LibBaseVolStrike.InsufficientVerificationFee();
     }
-
-    (bytes memory payload, ) = bvs.pythLazer.verifyUpdate{ value: verificationFee }(
-      priceLazerData.priceData
-    );
-
-    uint256 excessAmount = msg.value - verificationFee;
+    uint256 excessAmount = msg.value - fee;
     if (excessAmount > 0) {
       (bool success, ) = payable(msg.sender).call{ value: excessAmount }("");
       if (!success) {
@@ -289,55 +263,20 @@ contract RoundManagementFacet {
       }
     }
 
-    (uint64 publishTime, PythLazerLib.Channel channel, uint8 feedsLen, uint16 pos) = PythLazerLib
-      .parsePayloadHeader(payload);
-    uint256 publishTimeInSeconds = uint256(publishTime) / MICROSECONDS_PER_SECOND;
-    require(datetime >= publishTimeInSeconds, "Invalid publish time: future timestamp");
-    require(datetime - publishTimeInSeconds <= MAX_PRICE_AGE, "Stale price: exceeds maximum age");
+    PythStructs.PriceFeed[] memory feeds = bvs.oracle.parsePriceFeedUpdates{ value: fee }(
+      updateData,
+      priceIds,
+      initDate,
+      initDate + uint64(IPYTH_PARSE_BUFFER_SECONDS)
+    );
 
-    PriceData[] memory tempData = new PriceData[](feedsLen);
-    uint256 validCount = 0;
-
-    for (uint8 i = 0; i < feedsLen; i++) {
-      uint32 feedId;
-      uint8 numProperties;
-      (feedId, numProperties, pos) = PythLazerLib.parseFeedHeader(payload, pos);
-
-      uint64 price = 0;
-      bool priceFound = false;
-
-      for (uint8 j = 0; j < numProperties; j++) {
-        PythLazerLib.PriceFeedProperty property;
-        (property, pos) = PythLazerLib.parseFeedProperty(payload, pos);
-        if (property == PythLazerLib.PriceFeedProperty.Price) {
-          (price, pos) = PythLazerLib.parseFeedValueUint64(payload, pos);
-          priceFound = true;
-        }
-      }
-
-      if (priceFound && price > 0) {
-        uint256 productId = type(uint256).max;
-        for (uint256 k = 0; k < priceLazerData.mappings.length; k++) {
-          if (priceLazerData.mappings[k].priceFeedId == uint256(feedId)) {
-            productId = priceLazerData.mappings[k].productId;
-            break;
-          }
-        }
-
-        // Check if productId is valid and price is reasonable
-        if (productId != type(uint256).max) {
-          tempData[validCount] = PriceData({ productId: productId, price: price });
-          validCount++;
-        }
-      }
+    PriceData[] memory priceData = new PriceData[](feeds.length);
+    for (uint256 i = 0; i < feeds.length; i++) {
+      priceData[i] = PriceData({
+        productId: updateDataWithIds[i].productId,
+        price: uint64(feeds[i].price.price)
+      });
     }
-
-    PriceData[] memory priceData = new PriceData[](validCount);
-
-    for (uint256 i = 0; i < validCount; i++) {
-      priceData[i] = tempData[i];
-    }
-
     return priceData;
   }
 

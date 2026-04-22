@@ -407,47 +407,48 @@ contract BaseVolAdminFacetTimelock {
     uint256 _productId,
     string calldata _symbol
   ) external onlyOperator {
-    _addPriceId(_priceId, _productId, _symbol);
+    _setPriceId(_priceId, _productId, _symbol);
+  }
+
+  function initializeDefaultPriceIds() external onlyOperator {
+    _setPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
+    _setPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");
+    _setPriceId(0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2, 2, "XAUT/USD");
+    _setPriceId(0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d, 3, "SOL/USD");
+    _setPriceId(0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8, 4, "XRP/USD");
   }
 
   function setPriceInfo(PriceInfo calldata priceInfo) external onlyOperator {
-    LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
-
-    if (priceInfo.priceId == bytes32(0)) revert LibBaseVolStrike.InvalidPriceId();
-    if (bytes(priceInfo.symbol).length == 0) revert LibBaseVolStrike.InvalidSymbol();
-
-    uint256 existingProductId = bvs.priceIdToProductId[priceInfo.priceId];
-    bytes32 oldPriceId = bvs.priceInfos[priceInfo.productId].priceId;
-
-    if (existingProductId != priceInfo.productId) {
-      if (existingProductId != 0 || bvs.priceInfos[0].priceId == priceInfo.priceId) {
-        revert LibBaseVolStrike.PriceIdAlreadyExists();
-      }
-    }
-
-    if (oldPriceId != bytes32(0)) {
-      delete bvs.priceIdToProductId[oldPriceId];
-    }
-
-    bvs.priceInfos[priceInfo.productId] = priceInfo;
-    bvs.priceIdToProductId[priceInfo.priceId] = priceInfo.productId;
-
-    emit PriceIdAdded(priceInfo.productId, priceInfo.priceId, priceInfo.symbol);
+    _setPriceId(priceInfo.priceId, priceInfo.productId, priceInfo.symbol);
   }
 
   // ============ Internal Functions ============
 
-  function _addPriceId(bytes32 _priceId, uint256 _productId, string memory _symbol) internal {
+  /// @dev Idempotent: same productId+priceId+symbol is a no-op. Otherwise upserts; increments count only for new product slot.
+  function _setPriceId(bytes32 _priceId, uint256 _productId, string memory _symbol) internal {
     LibBaseVolStrike.DiamondStorage storage bvs = LibBaseVolStrike.diamondStorage();
     if (_priceId == bytes32(0)) revert LibBaseVolStrike.InvalidPriceId();
-    if (bvs.priceIdToProductId[_priceId] != 0 || bvs.priceInfos[0].priceId == _priceId) {
-      revert LibBaseVolStrike.PriceIdAlreadyExists();
+    if (bytes(_symbol).length == 0) revert LibBaseVolStrike.InvalidSymbol();
+
+    if (
+      bvs.priceInfos[_productId].priceId == _priceId &&
+      keccak256(bytes(bvs.priceInfos[_productId].symbol)) == keccak256(bytes(_symbol))
+    ) {
+      return;
     }
-    if (bvs.priceInfos[_productId].priceId != bytes32(0)) {
-      revert LibBaseVolStrike.ProductIdAlreadyExists();
+
+    uint256 existingProductId = bvs.priceIdToProductId[_priceId];
+    if (existingProductId != _productId) {
+      if (existingProductId != 0 || bvs.priceInfos[0].priceId == _priceId) {
+        revert LibBaseVolStrike.PriceIdAlreadyExists();
+      }
     }
-    if (bytes(_symbol).length == 0) {
-      revert LibBaseVolStrike.InvalidSymbol();
+
+    bytes32 oldPriceId = bvs.priceInfos[_productId].priceId;
+    if (oldPriceId != bytes32(0)) {
+      delete bvs.priceIdToProductId[oldPriceId];
+    } else {
+      bvs.priceIdCount++;
     }
 
     bvs.priceInfos[_productId] = PriceInfo({
@@ -455,9 +456,7 @@ contract BaseVolAdminFacetTimelock {
       productId: _productId,
       symbol: _symbol
     });
-
     bvs.priceIdToProductId[_priceId] = _productId;
-    bvs.priceIdCount++;
 
     emit PriceIdAdded(_productId, _priceId, _symbol);
   }
