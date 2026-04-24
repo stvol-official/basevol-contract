@@ -9,7 +9,6 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
-import { PythLazer } from "../libraries/PythLazer.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IClearingHouse } from "../interfaces/IClearingHouse.sol";
@@ -44,7 +43,6 @@ abstract contract BaseVolStrike is
   uint256 private constant MAX_COMMISSION_FEE = 5000; // 50%
   uint256 private constant MAX_PRICE_DEVIATION_BPS = 5000; // 50% maximum price deviation (basis points)
   uint256 private constant IPYTH_PARSE_BUFFER_SECONDS = 600; // 10 * 60 (10min), Pyth parsePriceFeedUpdates time window
-  address private constant PYTH_LAZER_DEFAULT = 0xACeA761c27A909d4D3895128EBe6370FDE2dF481;
 
   // Abstract functions
   function _getStartTimestamp() internal pure virtual returns (uint256);
@@ -109,14 +107,10 @@ abstract contract BaseVolStrike is
 
     $.token = IERC20(_usdcAddress);
     $.clearingHouse = IClearingHouse(_clearingHouseAddress);
-    $.pythLazer = PythLazer(PYTH_LAZER_DEFAULT);
     $.oracle = IPyth(_oracleAddress);
     $.adminAddress = _adminAddress;
     $.operatorAddress = _operatorAddress;
     $.commissionfee = _commissionfee;
-
-    _setPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
-    _setPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");
   }
 
   function currentEpoch() external view returns (uint256) {
@@ -542,13 +536,7 @@ abstract contract BaseVolStrike is
     token.safeTransfer($.adminAddress, token.balanceOf(address(this)));
   }
 
-  function setPythLazer(address _pythLazer) external onlyAdmin {
-    if (_pythLazer == address(0)) revert InvalidAddress();
-    BaseVolStrikeStorage.Layout storage $ = _getStorage();
-    $.pythLazer = PythLazer(_pythLazer);
-  }
-
-  function setOracle(address _oracle) external whenPaused onlyAdmin {
+  function setOracle(address _oracle) external onlyAdmin {
     if (_oracle == address(0)) revert InvalidAddress();
     BaseVolStrikeStorage.Layout storage $ = _getStorage();
     $.oracle = IPyth(_oracle);
@@ -558,17 +546,17 @@ abstract contract BaseVolStrike is
     bytes32 _priceId,
     uint256 _productId,
     string calldata _symbol
-  ) external onlyOperator {
+  ) external onlyAdmin {
     _setPriceId(_priceId, _productId, _symbol);
   }
 
-  function initializeDefaultPriceIds() external onlyOperator {
-    _setPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
-    _setPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");
-    _setPriceId(0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2, 2, "XAUT/USD");
-    _setPriceId(0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d, 3, "SOL/USD");
-    _setPriceId(0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8, 4, "XRP/USD");
-  }
+  // function initializeDefaultPriceIds() external onlyAdmin {
+  //   _setPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
+  //   _setPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");
+  //   _setPriceId(0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2, 2, "XAUT/USD");
+  //   _setPriceId(0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d, 3, "SOL/USD");
+  //   _setPriceId(0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8, 4, "XRP/USD");
+  // }
 
   function unpause() external whenPaused onlyAdmin {
     _unpause();
@@ -580,7 +568,7 @@ abstract contract BaseVolStrike is
     $.operatorAddress = _operatorAddress;
   }
 
-  function setCommissionfee(uint256 _commissionfee) external whenPaused onlyAdmin {
+  function setCommissionfee(uint256 _commissionfee) external onlyAdmin {
     if (_commissionfee > MAX_COMMISSION_FEE) revert InvalidCommissionFee();
     BaseVolStrikeStorage.Layout storage $ = _getStorage();
     $.commissionfee = _commissionfee;

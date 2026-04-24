@@ -19,8 +19,8 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-// const DEPLOYED_PROXY = "0x26b0A1e85f66C4864d6ABB3B146714494B56A673"; // for testnet
-const DEPLOYED_PROXY = "0x74b8b5e70B81f52d119aeF431682DB302Ddd91F4"; // for mainnet
+const DEPLOYED_PROXY = "0x26b0A1e85f66C4864d6ABB3B146714494B56A673"; // for testnet
+// const DEPLOYED_PROXY = "0x74b8b5e70B81f52d119aeF431682DB302Ddd91F4"; // for mainnet
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));

@@ -19,8 +19,15 @@ import input from "@inquirer/input";
 */
 
 const NETWORK = ["base_sepolia", "base"];
-// const DEPLOYED_PROXY = "0x31e82Ce63b81c83E9eD1838B575F720BCD87029e"; // for testnet
-const DEPLOYED_PROXY = "0xaECB62F8249D57fc1BDa3B453B67b3497FDcd4AE"; // for mainnet
+const DEPLOYED_PROXY = "0x31e82Ce63b81c83E9eD1838B575F720BCD87029e"; // for testnet
+// const DEPLOYED_PROXY = "0xaECB62F8249D57fc1BDa3B453B67b3497FDcd4AE"; // for mainnet
+
+function explorerAddressUrl(networkName: string, address: string): string {
+  if (networkName === "base") {
+    return `https://basescan.org/address/${address}#code`;
+  }
+  return `https://sepolia.basescan.org/address/${address}#code`;
+}
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -93,7 +100,7 @@ const upgrade = async () => {
       addressToVerify = await upgrades.erc1967.getImplementationAddress(baseVolContractAddress);
       console.log(`🍣 ${contractName} Contract upgraded at ${baseVolContractAddress}`);
       console.log(`   New implementation (check this address on explorer): ${addressToVerify}`);
-      console.log(`   → https://sepolia.basescan.org/address/${addressToVerify}#code`);
+      console.log(`   → ${explorerAddressUrl(networkName, addressToVerify)}`);
     } else {
       const baseVolContract = await upgrades.prepareUpgrade(PROXY, BaseVolFactory, {
         kind: "uups",
@@ -101,7 +108,7 @@ const upgrade = async () => {
       });
       baseVolContractAddress = baseVolContract;
       addressToVerify = baseVolContract as string;
-      console.log(`�� New implementation contract deployed at: ${baseVolContract}`);
+      console.log(`🍣 New implementation contract deployed at: ${baseVolContract}`);
       console.log("Use this address in your Safe transaction to upgrade the proxy");
 
       /**
@@ -134,17 +141,17 @@ const upgrade = async () => {
        */
     }
 
-    const network = await ethers.getDefaultProvider().getNetwork();
-
     await sleep(6000);
 
+    // Refresh artifacts so verify compares the same sources/settings as this run (helps avoid stale cache edge cases).
+    await run("compile", { force: true });
+
     console.log(
-      "Verifying implementation contract (skipping proxy verification to avoid Basescan v2 chainid issue)...",
+      "Verifying implementation contract (Hardhat uses --network from CLI; verify later with scripts/verify-basevol-lazer-1min.ts if needed)...",
     );
     try {
       await run("verify:verify", {
         address: addressToVerify,
-        network: network,
         contract: `contracts/core/${contractName}.sol:${contractName}`,
         constructorArguments: [],
         force: true,
@@ -154,6 +161,13 @@ const upgrade = async () => {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("already verified") || msg.includes("ContractAlreadyVerifiedError")) {
         console.log("Implementation already verified on block explorer. Skipping.");
+      } else if (msg.includes("DeployedBytecodeMismatch") || msg.includes("bytecode doesn't match")) {
+        console.error("\n⚠️  Verify skipped: local bytecode does not match on-chain implementation.");
+        console.error("   Upgrade already succeeded. To verify later:");
+        console.error("   - Use the same git commit + npm ci as this deploy, then:");
+        console.error(`     npx hardhat run --network ${networkName} scripts/verify-basevol-lazer-1min.ts`);
+        console.error(`   - Or verify manually on Basescan: ${explorerAddressUrl(networkName, addressToVerify)}`);
+        console.error("");
       } else {
         throw e;
       }

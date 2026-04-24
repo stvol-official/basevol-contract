@@ -524,13 +524,13 @@ contract BaseVolOneMin is
     }
   }
 
-  function setPythLazer(address _pythLazer) external whenPaused onlyOperator {
+  function setPythLazer(address _pythLazer) external onlyAdmin {
     if (_pythLazer == address(0)) revert InvalidAddress();
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
     $.pythLazer = PythLazer(_pythLazer);
   }
 
-  function setOracle(address _oracle) external whenPaused onlyAdmin {
+  function setOracle(address _oracle) external onlyAdmin {
     if (_oracle == address(0)) revert InvalidAddress();
     BaseVolOneMinStorage.Layout storage $ = BaseVolOneMinStorage.layout();
     $.oracle = IPyth(_oracle);
@@ -544,7 +544,7 @@ contract BaseVolOneMin is
     _setPriceId(_priceId, _productId, _symbol);
   }
 
-  function initializeDefaultPriceIds() external onlyOperator {
+  function initializeDefaultPriceIds() external onlyAdmin {
     _setPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
     _setPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");
     _setPriceId(0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2, 2, "XAUT/USD");
