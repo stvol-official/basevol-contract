@@ -553,7 +553,7 @@ abstract contract BaseVolStrike is
   // function initializeDefaultPriceIds() external onlyAdmin {
   //   _setPriceId(0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43, 0, "BTC/USD");
   //   _setPriceId(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace, 1, "ETH/USD");
-  //   _setPriceId(0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2, 2, "XAUT/USD");
+  //   _setPriceId(0x44465e17d2e9d390e70c999d5a11fda4f092847fcd2e3e5aa089d96c98a30e67, 2, "XAUT/USD");
   //   _setPriceId(0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d, 3, "SOL/USD");
   //   _setPriceId(0xec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8, 4, "XRP/USD");
   // }
